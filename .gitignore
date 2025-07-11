@@ -38,3 +38,12 @@ coverage.xml
 
 # VS Code
 .vscode/
+
+# Checkpoints
+checkpoints/
+
+# Logs
+logs/
+
+# Results
+results/
