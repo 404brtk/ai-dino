@@ -10,7 +10,7 @@ import time
 from queue import Queue, Empty
 from typing import Tuple, Optional, Dict, Any
 from playwright.async_api import async_playwright, Playwright, Page, Browser, Error as PlaywrightError
-from PIL import Image
+import cv2
 import matplotlib.pyplot as plt
 
 from utils import FrameProcessor
@@ -171,17 +171,22 @@ class DinoGameEnvironment(gym.Env):
 
             # 2. Take screenshot
             screenshot_bytes = await self.page.screenshot(type='png')
-            img = Image.open(io.BytesIO(screenshot_bytes))
-            raw_frame = np.array(img)
 
-            # 3. Crop the frame using the bounding box
+            # 3. Decode PNG bytes → ndarray using OpenCV, then convert BGR → RGB
+            img_arr = np.frombuffer(screenshot_bytes, dtype=np.uint8)
+            raw_frame = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+            if raw_frame is None:
+                raise ValueError("Failed to decode screenshot bytes with OpenCV.")
+            raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
+
+            # 4. Crop the frame using the bounding box
             if box:
                 x, y, w, h = int(box['x']), int(box['y']), int(box['width']), int(box['height'])
                 raw_frame = raw_frame[y:y+h, x:x+w, :] # Crop using numpy slicing
             else:
                 self.logger.warning("Game canvas not found, using uncropped frame.")
 
-            # 4. Process the frame (handles grayscale, resize, normalize, stacking)
+            # 5. Process the frame (handles grayscale, resize, normalize, stacking)
             return self.frame_processor.process_frame(raw_frame)
             
         except Exception as e:
