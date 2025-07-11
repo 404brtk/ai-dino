@@ -59,7 +59,9 @@ class DQNAgent:
     def __init__(self, input_shape: Tuple[int, int, int], n_actions: int,
                  lr: float = 0.0001, gamma: float = 0.99, 
                  buffer_size: int = 100000, batch_size: int = 32,
-                 target_update_freq: int = 1000, device: str = 'cuda'):
+                 target_update_freq: int = 1000, device: str = 'cuda',
+                 start_eps: float = 1.0, end_eps: float = 0.01,
+                 decay_steps: int = 10000):
         """
         Initialize DQN Agent.
         
@@ -72,6 +74,9 @@ class DQNAgent:
             batch_size: Batch size for training
             target_update_freq: Frequency of target network updates
             device: Device to run on ('cuda' or 'cpu')
+            start_eps: Initial epsilon value
+            end_eps: Final epsilon value
+            decay_steps: Number of steps to decay from start to end
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.n_actions = n_actions
@@ -79,6 +84,9 @@ class DQNAgent:
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
         self.update_count = 0
+        self.start_eps = start_eps
+        self.end_eps = end_eps
+        self.decay_steps = decay_steps
         
         # Networks
         self.q_network = DQN(input_shape, n_actions).to(self.device)
@@ -90,7 +98,7 @@ class DQNAgent:
         
         # Replay buffer and exploration
         self.replay_buffer = PrioritizedReplayBuffer(buffer_size)
-        self.epsilon_greedy = EpsilonGreedy()
+        self.epsilon_greedy = EpsilonGreedy(self.start_eps, self.end_eps, self.decay_steps)
         
         # Loss function (using Huber loss for more stability)
         self.criterion = nn.SmoothL1Loss()
