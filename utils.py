@@ -30,12 +30,12 @@ class TrainingConfig:
         self.decay_steps = 15000
         
         # Training parameters
-        self.total_episodes = 1000
-        self.warmup_episodes = 20
-        self.train_freq = 2
+        self.total_episodes = 10000
+        self.warmup_episodes = 40
+        self.train_freq = 4
         self.eval_freq = 50
         self.save_freq = 100
-        self.log_freq = 10
+        self.log_freq = 1
         
         # Paths
         self.checkpoint_dir = 'checkpoints'
