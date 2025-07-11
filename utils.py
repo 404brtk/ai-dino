@@ -2,10 +2,110 @@ import numpy as np
 import math
 import cv2
 from collections import deque
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Dict, Any
+import torch
+from torch.utils.tensorboard import SummaryWriter
+
+class TrainingConfig:
+    """Configuration class for training parameters."""
+    
+    def __init__(self):
+        # Environment parameters
+        self.headless = False
+        self.frame_stack = 4
+        self.frame_skip = 2
+        self.processed_size = (84, 84)
+        self.max_episode_steps = 10000
+        self.reward_scale = 1.0
+        
+        # Agent parameters
+        self.lr = 0.0001
+        self.gamma = 0.99
+        self.buffer_size = 100000
+        self.batch_size = 32
+        self.target_update_freq = 1000
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.start_eps = 1.0
+        self.end_eps = 0.01
+        self.decay_steps = 15000
+        
+        # Training parameters
+        self.total_episodes = 1000
+        self.warmup_episodes = 20
+        self.train_freq = 2
+        self.eval_freq = 50
+        self.save_freq = 100
+        self.log_freq = 10
+        
+        # Paths
+        self.checkpoint_dir = 'checkpoints'
+        self.log_dir = 'logs'
+        self.results_dir = 'results'
+
+
+
+class TrainingMetrics:
+    """Class to track and manage training metrics."""
+    
+    def __init__(self):
+        self.episode_rewards: List[float] = []
+        self.episode_scores: List[int] = []
+        self.episode_lengths: List[int] = []
+        self.losses: List[float] = []
+        self.epsilon_values: List[float] = []
+        
+        # Running averages
+        self.avg_reward_window = 100
+        self.avg_score_window = 100
+        
+    def add_episode(self, reward: float, score: int, length: int, epsilon: float):
+        """Add episode metrics."""
+        self.episode_rewards.append(reward)
+        self.episode_scores.append(score)
+        self.episode_lengths.append(length)
+        self.epsilon_values.append(epsilon)
+        
+    def add_loss(self, loss: float):
+        """Add training loss."""
+        if loss is not None:
+            self.losses.append(loss)
+    
+    def get_recent_avg_reward(self) -> float:
+        """Get average reward over recent episodes."""
+        if len(self.episode_rewards) == 0:
+            return 0.0
+        recent_rewards = self.episode_rewards[-self.avg_reward_window:]
+        return np.mean(recent_rewards)
+    
+    def get_recent_avg_score(self) -> float:
+        """Get average score over recent episodes."""
+        if len(self.episode_scores) == 0:
+            return 0.0
+        recent_scores = self.episode_scores[-self.avg_score_window:]
+        return np.mean(recent_scores)
+    
+    def get_best_score(self) -> int:
+        """Get the best score achieved."""
+        return max(self.episode_scores) if self.episode_scores else 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary for saving."""
+        return {
+            # Core training data
+            'episode_rewards': self.episode_rewards,
+            'episode_scores': self.episode_scores,
+            'episode_lengths': self.episode_lengths,
+            'losses': self.losses,
+            'epsilon_values': self.epsilon_values,
+
+            # Summary statistics
+            'best_score': self.get_best_score(),
+            'final_avg_reward': self.get_recent_avg_reward(),
+            'final_avg_score': self.get_recent_avg_score()
+        }
 
 class PrioritizedReplayBuffer:
-    """Advanced experience buffer with prioritized sampling and analysis."""
+    """Advanced experience buffer with prioritized sampling."""
     
     def __init__(self, 
                  capacity: int = 100000,
@@ -28,7 +128,7 @@ class PrioritizedReplayBuffer:
         self.buffer = []
         self.priorities = deque(maxlen=capacity)
         self.position = 0
-        
+
     def add(self, experience: Tuple, priority: float = None):
         """Add experience with priority."""
         if priority is None:
@@ -42,7 +142,7 @@ class PrioritizedReplayBuffer:
             self.priorities[self.position] = priority
             
         self.position = (self.position + 1) % self.capacity
-    
+
     def sample(self, batch_size: int) -> Tuple[List, np.ndarray, np.ndarray]:
         """Sample batch with prioritized sampling."""
         if len(self.buffer) < batch_size:
@@ -73,6 +173,10 @@ class PrioritizedReplayBuffer:
         for idx, priority in zip(indices, priorities):
             self.priorities[idx] = priority + 1e-6  # Small epsilon to avoid zero priority
 
+    def __len__(self) -> int:
+        """Return the current number of stored experiences."""
+        return len(self.buffer)
+
 
 class EpsilonGreedy:
     """Epsilon-greedy exploration strategy with decay."""
@@ -102,16 +206,14 @@ class EpsilonGreedy:
 
     def get_epsilon(self) -> float:
         """Get current epsilon value and increment step."""
-        if self.step >= self.decay_steps:
-            return self.end_eps
-        
-        epsilon = self.end_eps + (self.start_eps - self.end_eps) * \
-                  math.exp(-1. * self.step / self.decay_steps)
+        epsilon = self.peek()
         self.step += 1
         return epsilon
 
 
 class FrameProcessor:
+    """Frame processing utilities for game observations."""
+    
     def __init__(self, 
                 target_size: Tuple[int, int] = (84, 84),
                 stack_frames: int = 4):
@@ -154,8 +256,32 @@ class FrameProcessor:
             self.frame_buffer.appendleft(np.zeros_like(frame))
             
         # Convert deque to list for numpy stacking
-        return np.stack(self.frame_buffer, axis=0)
+        return np.stack(list(self.frame_buffer), axis=0)
     
     def reset(self):
         """Reset the frame buffer."""
         self.frame_buffer.clear()
+
+
+class TensorBoardLogger:
+    """A simple logger for TensorBoard visualization."""
+
+
+    def __init__(self, log_dir: str):
+        """
+        Initializes the TensorBoard logger.
+
+        Args:
+            log_dir (str): The directory to save TensorBoard logs.
+        """
+        self.writer = SummaryWriter(log_dir)
+
+
+    def log_scalar(self, tag: str, value: float, step: int):
+        """Logs a scalar value to TensorBoard."""
+        self.writer.add_scalar(tag, value, step)
+
+
+    def close(self):
+        """Closes the TensorBoard writer."""
+        self.writer.close()
