@@ -1,7 +1,8 @@
 import numpy as np
 import math
+import cv2
 from collections import deque
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 class PrioritizedReplayBuffer:
     """Advanced experience buffer with prioritized sampling and analysis."""
@@ -108,3 +109,53 @@ class EpsilonGreedy:
                   math.exp(-1. * self.step / self.decay_steps)
         self.step += 1
         return epsilon
+
+
+class FrameProcessor:
+    def __init__(self, 
+                target_size: Tuple[int, int] = (84, 84),
+                stack_frames: int = 4):
+        """
+        Initialize frame processor.
+        
+        Args:
+            target_size: (width, height) to resize frames to
+            stack_frames: Number of consecutive frames to stack
+        """
+        self.target_size = target_size
+        self.stack_frames = stack_frames
+        self.frame_buffer = deque(maxlen=stack_frames)
+        
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Process a single frame through the pipeline.
+        
+        Args:
+            frame: Input frame as numpy array (H, W, C)
+            
+        Returns:
+            Processed frame as numpy array (C, H, W)
+        """
+        # Convert to grayscale if the image is in color (3 dimensions)
+        if frame.ndim == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            
+        # Resize
+        frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+        
+        # Normalize to [0, 1]
+        frame = frame.astype(np.float32) / 255.0
+        
+        # Add to frame buffer
+        self.frame_buffer.append(frame)
+        
+        # For initial frames, pad with zeros
+        while len(self.frame_buffer) < self.stack_frames:
+            self.frame_buffer.appendleft(np.zeros_like(frame))
+            
+        # Convert deque to list for numpy stacking
+        return np.stack(self.frame_buffer, axis=0)
+    
+    def reset(self):
+        """Reset the frame buffer."""
+        self.frame_buffer.clear()
