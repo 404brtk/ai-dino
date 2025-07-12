@@ -274,43 +274,59 @@ def main():
     """Main function with argument parsing."""
     parser = argparse.ArgumentParser(description="Train DQN agent on Chrome Dino game")
     
-    # TODO: fix: default values override config values
     # Training parameters
-    parser.add_argument('--episodes', type=int, default=10000, help='Number of training episodes')
+    parser.add_argument('--episodes', type=int, default=None, help='Number of training episodes')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode')
-    parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
-    parser.add_argument('--buffer-size', type=int, default=100000, help='Replay buffer size')
-    parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cuda', 'cpu'], 
+    parser.add_argument('--lr', type=float, default=None, help='Learning rate')
+    parser.add_argument('--batch-size', type=int, default=None, help='Batch size')
+    parser.add_argument('--buffer-size', type=int, default=None, help='Replay buffer size')
+    parser.add_argument('--device', type=str, default=None, choices=[None, 'auto', 'cuda', 'cpu'], 
                        help='Device to use for training')
-    
     # Paths
-    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', help='Checkpoint directory')
-    parser.add_argument('--log-dir', type=str, default='logs', help='Log directory')
-    parser.add_argument('--results-dir', type=str, default='results', help='Results directory')
+    parser.add_argument('--checkpoint-dir', type=str, default=None, help='Checkpoint directory')
+    parser.add_argument('--log-dir', type=str, default=None, help='Log directory')
+    parser.add_argument('--results-dir', type=str, default=None, help='Results directory')
     
     # Resume training
     parser.add_argument('--resume', type=str, help='Path to checkpoint to resume from')
     
     args = parser.parse_args()
     
-    # Create config
+    # Create config with defaults
     config = TrainingConfig()
     
-    # Update config with args
-    config.total_episodes = args.episodes
-    config.headless = args.headless
-    config.lr = args.lr
-    config.batch_size = args.batch_size
-    config.buffer_size = args.buffer_size
-    config.checkpoint_dir = args.checkpoint_dir
-    config.log_dir = args.log_dir
-    config.results_dir = args.results_dir
+    # Update config ONLY if args were provided
+    if args.episodes is not None:
+        config.total_episodes = args.episodes
     
-    if args.device == 'auto':
-        config.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    else:
-        config.device = args.device
+    # headless is special - store_true means it's False by default
+    if args.headless:
+        config.headless = True
+    
+    if args.lr is not None:
+        config.lr = args.lr
+    
+    if args.batch_size is not None:
+        config.batch_size = args.batch_size
+    
+    if args.buffer_size is not None:
+        config.buffer_size = args.buffer_size
+    
+    if args.checkpoint_dir is not None:
+        config.checkpoint_dir = args.checkpoint_dir
+    
+    if args.log_dir is not None:
+        config.log_dir = args.log_dir
+    
+    if args.results_dir is not None:
+        config.results_dir = args.results_dir
+    
+    # Device handling
+    if args.device is not None:
+        if args.device == 'auto':
+            config.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            config.device = args.device
     
     # Create trainer and start training
     trainer = DinoTrainer(config)
