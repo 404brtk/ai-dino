@@ -1,4 +1,5 @@
 import os
+import glob
 import time
 import json
 import argparse
@@ -134,26 +135,30 @@ class DinoTrainer:
             'std_score': np.std(eval_scores)
         }
     
-    # TODO: add cleanup old checkpoints (keep last 3)
 
-    def save_checkpoint(self, is_best: bool = False):
+    def save_checkpoint(self):
         """Save model checkpoint."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Save agent model
+        # Always save regular checkpoint
         model_path = os.path.join(self.config.checkpoint_dir, f'model_ep{self.episode}.pth')
         self.agent.save_model(model_path)
         
-        # Save best model separately
-        if is_best:
+        # Determine if this should be saved as "best" using our criteria
+        should_save_as_best = self._evaluate_best_model_criteria()
+        
+        if should_save_as_best:
             best_path = os.path.join(self.config.checkpoint_dir, 'best_model.pth')
             self.agent.save_model(best_path)
+            self.best_avg_score = self.metrics.get_recent_avg_score()
+            self.logger.info(f"New best model saved! Avg score: {self.best_avg_score:.2f}")
         
         # Save training state
         state = {
             'episode': self.episode,
             'total_steps': self.total_steps,
             'best_avg_score': self.best_avg_score,
+            'timestamp': timestamp,
             'config': self.config.__dict__,
             'metrics': self.metrics.to_dict()
         }
@@ -161,6 +166,75 @@ class DinoTrainer:
         state_path = os.path.join(self.config.checkpoint_dir, f'training_state_ep{self.episode}.json')
         with open(state_path, 'w') as f:
             json.dump(state, f, indent=2)
+        
+        # Cleanup old checkpoints
+        self._cleanup_old_checkpoints(keep_last=3)
+        
+        self.logger.info(f"Checkpoint saved: episode {self.episode}")
+    
+    def _evaluate_best_model_criteria(self) -> bool:
+        """Multi-criteria evaluation for best model."""
+        # Criterion 1: Minimum episodes threshold
+        if self.episode < 50:
+            return False
+    
+        # Criterion 2: Recent average improvement
+        current_avg = self.metrics.get_recent_avg_score()
+        avg_improved = current_avg > self.best_avg_score
+    
+        # Criterion 3: Best single score improvement
+        current_best_single = self.metrics.get_best_score()
+        single_score_improved = current_best_single > getattr(self, 'best_single_score', 0)
+    
+        # Criterion 4: Consistency check (low variance in recent episodes)
+        recent_scores = self.metrics.episode_scores[-20:]
+        if len(recent_scores) >= 20:
+            variance = np.var(recent_scores)
+            is_consistent = variance < np.var(self.metrics.episode_scores) * 0.8
+        else:
+            is_consistent = True
+    
+        # Save as best if average improved AND (single score improved OR performance is consistent)
+        should_save = avg_improved and (single_score_improved or is_consistent)
+    
+        if should_save and single_score_improved:
+            self.best_single_score = current_best_single
+    
+        return should_save
+
+    def _cleanup_old_checkpoints(self, keep_last: int = 3):
+        """Remove old checkpoint files, keeping only the most recent ones."""
+        try:
+            # Find all model files (excluding best_model.pth)
+            model_pattern = os.path.join(self.config.checkpoint_dir, 'model_ep*.pth')
+            model_files = glob.glob(model_pattern)
+            
+            # Find all state files
+            state_pattern = os.path.join(self.config.checkpoint_dir, 'training_state_ep*.json')
+            state_files = glob.glob(state_pattern)
+            
+            # Sort by episode number and remove oldest files
+            if len(model_files) > keep_last:
+                # Extract episode numbers and sort
+                model_files.sort(key=lambda x: int(x.split('_ep')[1].split('.')[0]))
+                files_to_remove = model_files[:-keep_last]
+                
+                for old_file in files_to_remove:
+                    os.remove(old_file)
+                    self.logger.debug(f"Removed old model checkpoint: {os.path.basename(old_file)}")
+            
+            if len(state_files) > keep_last:
+                # Extract episode numbers and sort
+                state_files.sort(key=lambda x: int(x.split('_ep')[1].split('.')[0]))
+                files_to_remove = state_files[:-keep_last]
+                
+                for old_file in files_to_remove:
+                    os.remove(old_file)
+                    self.logger.debug(f"Removed old state file: {os.path.basename(old_file)}")
+                    
+        except Exception as e:
+            self.logger.warning(f"Error during checkpoint cleanup: {e}")
+            # Don't raise exception - cleanup failure shouldn't stop training
 
     
     def log_progress(self, episode_result: Dict[str, Any]):
@@ -236,16 +310,10 @@ class DinoTrainer:
                         self.tb_logger.log_scalar('Evaluation/Avg_Reward', eval_results['avg_reward'], episode)
                 
                 # Save checkpoint
-                current_avg_score = self.metrics.get_recent_avg_score()
-                is_best = current_avg_score > self.best_avg_score
-                if is_best:
-                    self.best_avg_score = current_avg_score
-                    self.save_checkpoint(is_best=True)
-                    self.logger.info(f"New best model saved! Avg score: {self.best_avg_score:.2f}")
+                should_save_best = self._evaluate_best_model_criteria()
                 
-                if episode % self.config.save_freq == 0:
-                    self.save_checkpoint(is_best=False)
-                    self.logger.info(f"Regular checkpoint saved: {episode}")
+                if episode % self.config.save_freq == 0 or should_save_best:
+                    self.save_checkpoint()
         
         except KeyboardInterrupt:
             self.logger.info("Training interrupted by user")
