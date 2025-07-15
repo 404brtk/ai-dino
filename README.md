@@ -62,6 +62,11 @@ With custom parameters, for example:
 python train.py --episodes 5000 --headless --device cuda
 ```
 
+To resume training from a previous checkpoint:
+```bash
+python train.py --resume ./checkpoints/dqn_checkpoint_episode_1000.pth
+```
+
 Available options:
 - `--episodes`: Number of training episodes
 - `--headless`: Run in headless mode (no visible browser)
@@ -72,6 +77,7 @@ Available options:
 - `--checkpoint-dir`: Directory to save checkpoints
 - `--log-dir`: Directory for TensorBoard logs
 - `--results-dir`: Directory for results
+- `--resume`: Path to checkpoint to resume training from
 
 ### Testing the Environment
 
