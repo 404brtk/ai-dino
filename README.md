@@ -40,6 +40,7 @@ For the complete list of requirements, see `requirements.txt`.
   - `EpsilonGreedy`: Handles exploration/exploitation balance
   - `TrainingMetrics`: Tracks training progress
 - `train.py`: Manages the training loop and logging
+- `test.py`: Evaluates trained models without additional training
 
 ## How to Use
 
@@ -78,6 +79,26 @@ Available options:
 - `--log-dir`: Directory for TensorBoard logs
 - `--results-dir`: Directory for results
 - `--resume`: Path to checkpoint to resume training from
+
+### Testing Trained Models
+
+To evaluate a trained model without further training:
+
+```bash
+python test.py --model ./checkpoints/best_model.pth
+```
+
+With custom parameters:
+```bash
+python test.py --model ./checkpoints/best_model.pth --episodes 3 --delay 0.05
+```
+
+Available options:
+- `--model`: Path to the trained model file (.pth) [required]
+- `--episodes`: Number of test episodes to run (default: 5)
+- `--headless`: Run in headless mode (no browser UI)
+- `--device`: Device to use ('auto', 'cuda', or 'cpu')
+- `--delay`: Optional delay between steps in seconds (to slow down visualization)
 
 ### Testing the Environment
 
