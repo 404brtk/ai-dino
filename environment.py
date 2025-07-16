@@ -36,6 +36,13 @@ class DinoGameEnvironment(gym.Env):
         self.processed_size = processed_size
         self.max_episode_steps = max_episode_steps
         self.reward_scale = reward_scale
+        self.base_reward_scale = reward_scale
+        self.adaptive_reward_scale = reward_scale  # Will adapt during training
+        
+        # Action tracking for reward shaping
+        self.last_action = None
+        self.action_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # Count of each action type
+        self.consecutive_same_actions = 0
 
         self.logger = logging.getLogger(__name__)
 
@@ -226,22 +233,51 @@ class DinoGameEnvironment(gym.Env):
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
+        # Update adaptive reward scale based on training progress
+        if self.current_step % 100 == 0 and self.current_step > 0:
+            # Increase reward scale slightly as training progresses
+            # Caps at 2x the original value to avoid instability
+            max_scale_factor = 2.0
+            progress_factor = min(self.current_step / 100, 1.0)  # Scale based on steps
+            self.adaptive_reward_scale = self.base_reward_scale * (1.0 + progress_factor * (max_scale_factor - 1.0))
+        else:
+            # Use the current reward scale for initial steps
+            self.adaptive_reward_scale = self.reward_scale
+            
         if game_state.get('crashed', False):
             return -10.0  # Large penalty for crashing
 
         # Base survival reward
-        reward = 0.1 * self.reward_scale
+        reward = 0.1 * self.adaptive_reward_scale
         
         # Score-based reward - progressive difficulty handling
         current_score = game_state.get('score', self.last_score)
         score_diff = current_score - self.last_score
+        speed = game_state.get('speed', 0)
 
         if score_diff > 0:
             # Higher reward for higher speeds (difficulty)
-            speed = game_state.get('speed', 0)
             # Scale reward by speed, capping the factor to avoid extreme rewards
             speed_factor = min(2.0, speed / 10.0)
-            reward += score_diff * 0.1 * speed_factor * self.reward_scale
+            reward += score_diff * 0.1 * speed_factor * self.adaptive_reward_scale
+            
+            # Additional reward for efficient obstacle navigation (if score increased)
+            # Reward is higher if fewer actions were taken to achieve this progress
+            total_actions = sum(self.action_counts.values())
+            if total_actions > 0:
+                efficiency_factor = max(0.5, 1.0 - (total_actions / (current_score + 1)) * 0.1)
+                reward += score_diff * 0.05 * efficiency_factor * self.adaptive_reward_scale
+        
+        # Action efficiency rewards/penalties
+        if self.last_action is not None:
+            # Penalize excessive do-nothing (action 0) at higher speeds
+            if self.last_action == 0 and speed > 10:
+                reward -= 0.01 * self.adaptive_reward_scale
+            
+            # Penalize excessive consecutive jumping/ducking
+            if self.last_action in [1, 2, 3] and self.consecutive_same_actions > 2:
+                # Penalty increases with each additional consecutive action
+                reward -= (0.02 * (self.consecutive_same_actions - 2)) * self.adaptive_reward_scale
         
         self.last_score = current_score
         
@@ -306,22 +342,17 @@ class DinoGameEnvironment(gym.Env):
             self.logger.error(f"Unexpected error during reset: {e}")
             return np.zeros(self.observation_space.shape, dtype=np.float32)
 
-        # Reset internal state
-        self.current_step = 0
-        self.last_score = 0
-        self.episode_reward = 0.0
-
-        # Reset the frame processor's internal buffer
+        # Reset the frame processor's internal buffer only
         self.frame_processor.reset()
-
+        
         # Get the initial stacked observation
         return await self._capture_and_process_frame()
 
 
     async def _async_step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Executes one game step efficiently and correctly."""
+        """Executes game action in the browser and returns results."""
         try:
-            # 1. Perform action
+            # 1. Perform action in browser
             if action == 1:  # Long Jump
                 await self.page.keyboard.press('ArrowUp', delay=200)
             elif action == 2:  # Short Jump
@@ -329,20 +360,20 @@ class DinoGameEnvironment(gym.Env):
             elif action == 3:  # Duck
                 await self.page.keyboard.press('ArrowDown', delay=500)
 
-            # 4. Get the definitive state of the game after the action
+            # 2. Get the definitive state of the game after the action
             game_state = await self._get_game_state()
             terminated = game_state.get('crashed', False)
 
-            # 5. Calculate reward based on the final state
+            # 3. Calculate reward based on the final state
             reward = self._calculate_reward(game_state)
 
-            # 6. Capture the visual observation
+            # 4. Capture the visual observation
             observation = await self._capture_and_process_frame()
             if observation is None:
                 observation = np.zeros(self.observation_space.shape, dtype=np.float32)
                 self.logger.warning("Failed to capture frame, returning blank observation.")
 
-            # 7. Update internal state and prepare return values
+            # 5. Update internal state and prepare return values
             self.episode_reward += reward
             self.current_step += 1
             truncated = self.current_step >= self.max_episode_steps
@@ -368,6 +399,11 @@ class DinoGameEnvironment(gym.Env):
         self.current_step = 0
         self.last_score = 0
         self.episode_reward = 0.0
+        
+        # Reset action tracking variables
+        self.last_action = None
+        self.action_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        self.consecutive_same_actions = 0
         
         # Ensure the game thread is alive
         if not self.game_thread.is_alive():
@@ -411,7 +447,17 @@ class DinoGameEnvironment(gym.Env):
             raise TimeoutError("The game thread did not respond to the reset command.")
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Executes one step in the environment."""
+        """Executes one step in the environment.
+        Handles state tracking and communicates with the async game thread.
+        """
+        self.action_counts[action] += 1
+        if self.last_action == action:
+            self.consecutive_same_actions += 1
+        else:
+            self.consecutive_same_actions = 1
+        self.last_action = action
+        
+        # Send action to the game thread
         self.action_queue.put(action)
         try:
             result = self.state_queue.get(timeout=10)
