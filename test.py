@@ -46,7 +46,6 @@ class DinoTester:
         
         # Environment settings
         self.frame_stack = 4
-        self.frame_skip = 2
         self.processed_size = (84, 84)
         
         # Initialize environment
@@ -54,7 +53,6 @@ class DinoTester:
         self.env = DinoGameEnvironment(
             headless=headless,
             frame_stack=self.frame_stack,
-            frame_skip=self.frame_skip,
             processed_size=self.processed_size,
             max_episode_steps=100000  # Set a high value for testing
         )

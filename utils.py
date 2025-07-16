@@ -13,7 +13,6 @@ class TrainingConfig:
         # Environment parameters
         self.headless = False
         self.frame_stack = 4
-        self.frame_skip = 2
         self.processed_size = (84, 84)
         self.max_episode_steps = 10000
         self.reward_scale = 1.0

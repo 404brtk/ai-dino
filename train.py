@@ -39,7 +39,6 @@ class DinoTrainer:
         self.env = DinoGameEnvironment(
             headless=config.headless,
             frame_stack=config.frame_stack,
-            frame_skip=config.frame_skip,
             processed_size=config.processed_size,
             max_episode_steps=config.max_episode_steps,
             reward_scale=config.reward_scale

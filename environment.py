@@ -25,7 +25,6 @@ class DinoGameEnvironment(gym.Env):
     def __init__(self,
                  headless: bool = False,
                  frame_stack: int = 4,
-                 frame_skip: int = 2,
                  processed_size: Tuple[int, int] = (84, 84),
                  max_episode_steps: int = 10000,
                  reward_scale: float = 1.0):
@@ -34,7 +33,6 @@ class DinoGameEnvironment(gym.Env):
         # Core parameters
         self.headless = headless
         self.frame_stack = frame_stack
-        self.frame_skip = frame_skip
         self.processed_size = processed_size
         self.max_episode_steps = max_episode_steps
         self.reward_scale = reward_scale
@@ -329,14 +327,7 @@ class DinoGameEnvironment(gym.Env):
             elif action == 2:  # Short Jump
                 await self.page.keyboard.press('ArrowUp', delay=50)
             elif action == 3:  # Duck
-                await self.page.keyboard.down('ArrowDown')
-
-            # 2. Wait for action to take effect (frame skip duration)
-            await asyncio.sleep(0.01 * self.frame_skip)
-
-            # 3. Release duck key if it was held down
-            if action == 3:
-                await self.page.keyboard.up('ArrowDown')
+                await self.page.keyboard.press('ArrowDown', delay=500)
 
             # 4. Get the definitive state of the game after the action
             game_state = await self._get_game_state()
