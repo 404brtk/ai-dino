@@ -369,26 +369,54 @@ class DinoGameEnvironment(gym.Env):
                     -10.0, True, False, {'score': self.last_score, 'speed': 0, 'error': str(e)})
 
 
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Resets the environment for a new episode."""
         super().reset(seed=seed)
+        
+        # Reset internal state
+        self.current_step = 0
+        self.last_score = 0
+        self.episode_reward = 0.0
         
         # Ensure the game thread is alive
         if not self.game_thread.is_alive():
             self.logger.warning("Game thread not alive during reset, restarting...")
             self._restart_game_thread()
             
-        # Send reset command
+        # Send reset command to game thread
         self.action_queue.put('reset')
-        
         try:
-            state = self.state_queue.get(timeout=10)
-            if isinstance(state, Exception):
-                self.logger.error(f"Error during reset: {state}")
-                raise state
-            return state, {}
+            result = self.state_queue.get(timeout=10)
+            if isinstance(result, Exception):
+                raise result
+            return result, {}
         except Empty:
             self.logger.error("Reset timeout: no response from game thread")
+            
+            # Check if the game thread is still alive
+            if not self.game_thread.is_alive():
+                self.logger.warning("Game thread has died during reset. Attempting to restart it...")
+                self._restart_game_thread()
+                
+                # Clear the action queue and try again
+                while not self.action_queue.empty():
+                    try:
+                        self.action_queue.get_nowait()
+                    except Empty:
+                        break
+                        
+                # Try reset one more time after restart
+                self.action_queue.put('reset')
+                try:
+                    result = self.state_queue.get(timeout=10)
+                    if isinstance(result, Exception):
+                        raise result
+                    self.logger.info("Successfully recovered after game thread restart during reset")
+                    return result, {}
+                except Empty:
+                    self.logger.error("Still timeout after game thread restart during reset")
+            
+            # If we get here, recovery failed or wasn't attempted
             raise TimeoutError("The game thread did not respond to the reset command.")
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
@@ -400,8 +428,30 @@ class DinoGameEnvironment(gym.Env):
                 raise result
             return result
         except Empty:
+            # First check if the game thread is still alive
+            if not self.game_thread.is_alive():
+                self.logger.warning("Game thread has died. Attempting to restart it...")
+                self._restart_game_thread()
+                # Clear the action queue and try again
+                while not self.action_queue.empty():
+                    try:
+                        self.action_queue.get_nowait()
+                    except Empty:
+                        break
+                # Try step one more time after restart
+                self.action_queue.put(action)
+                try:
+                    result = self.state_queue.get(timeout=10)
+                    if isinstance(result, Exception):
+                        raise result
+                    self.logger.info("Successfully recovered after game thread restart")
+                    return result
+                except Empty:
+                    self.logger.error("Still timeout after game thread restart")
+            
+            # If we get here, recovery failed or wasn't attempted
             raise TimeoutError("The game thread did not respond to the step command.")
-
+            
     def close(self):
         """Cleans up all resources, ensuring the browser is closed."""
         if self.game_thread.is_alive():
