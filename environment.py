@@ -36,13 +36,6 @@ class DinoGameEnvironment(gym.Env):
         self.processed_size = processed_size
         self.max_episode_steps = max_episode_steps
         self.reward_scale = reward_scale
-        self.base_reward_scale = reward_scale
-        self.adaptive_reward_scale = reward_scale  # Will adapt during training
-        
-        # Action tracking for reward shaping
-        self.last_action = None
-        self.action_counts = {0: 0, 1: 0, 2: 0, 3: 0}  # Count of each action type
-        self.consecutive_same_actions = 0
 
         self.logger = logging.getLogger(__name__)
 
@@ -50,7 +43,7 @@ class DinoGameEnvironment(gym.Env):
         self.frame_processor = FrameProcessor(target_size=self.processed_size, stack_frames=self.frame_stack)
 
         # Gym-specific definitions
-        self.action_space = spaces.Discrete(4)  # 0: Do Nothing, 1: Long Jump, 2: Short Jump, 3: Duck
+        self.action_space = spaces.Discrete(3)  # 0: Do Nothing, 1: Long Jump, 2: Short Jump, NOT used for now: 3: Duck
 
         processed_height, processed_width = self.processed_size
 
@@ -64,6 +57,9 @@ class DinoGameEnvironment(gym.Env):
         self.current_step = 0
         self.last_score = 0
         self.episode_reward = 0.0
+        self.prev_obstacle_cleared = False
+        self.last_obstacle_len = 0
+        self.last_first_obstacle_x = -1
 
         # Playwright and browser state
         self.playwright: Optional[Playwright] = None
@@ -216,71 +212,90 @@ class DinoGameEnvironment(gym.Env):
         """Retrieves the current speed."""
         return await self.page.evaluate('() => window.Runner.instance_.currentSpeed')
 
+    async def _is_first_obstacle_cleared(self) -> bool:
+        """Returns True if the closest obstacle's right edge is behind the T-Rex (i.e., just cleared)."""
+        return await self.page.evaluate("""
+        () => {
+            const runner = window.Runner.instance_;
+            const obs = runner.horizon.obstacles;
+            if (!obs.length) return false;
+            const first = obs[0];
+            const tRexX = runner.tRex.xPos;
+            return (first.xPos + first.width) < tRexX;
+        }
+        """)
+
+    async def _get_obstacle_len(self) -> int:
+        """Returns the number of obstacles in the horizon."""
+        return await self.page.evaluate('() => window.Runner.instance_.horizon.obstacles.length')
+
+    async def _get_first_obstacle_x(self) -> float:
+        """Returns the x-position of the first obstacle."""
+        return await self.page.evaluate('() => window.Runner.instance_.horizon.obstacles.length ? \
+        window.Runner.instance_.horizon.obstacles[0].xPos : -1')
+
     async def _get_game_state(self) -> Dict[str, Any]:
         """Gets the current game state by calling helper methods."""
         try:
             # Use existing helper methods to fetch game state components
-            crashed, score, speed = await asyncio.gather(
+            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x = await asyncio.gather(
                 self._is_game_over(),
                 self._get_current_score(),
-                self._get_current_speed()
+                self._get_current_speed(),
+                self._is_first_obstacle_cleared(),
+                self._get_obstacle_len(),
+                self._get_first_obstacle_x()
             )
-            return {'crashed': crashed, 'score': score, 'speed': speed}
+            return {'crashed': crashed, 'score': score, 'speed': speed, 'is_obstacle_cleared': is_obstacle_cleared, 'obstacle_len': obstacle_len, 'first_obstacle_x': first_obstacle_x}
         except PlaywrightError as e:
             self.logger.error(f"Error getting game state: {e}")
             # Return a default state indicating a crash
-            return {'crashed': True, 'score': 0, 'speed': 0}
+            return {'crashed': True, 'score': 0, 'speed': 0, 'is_obstacle_cleared': False, 'obstacle_len': 0, 'first_obstacle_x': -1}
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
-        # Update adaptive reward scale based on training progress
-        if self.current_step % 100 == 0 and self.current_step > 0:
-            # Increase reward scale slightly as training progresses
-            # Caps at 2x the original value to avoid instability
-            max_scale_factor = 2.0
-            progress_factor = min(self.current_step / 100, 1.0)  # Scale based on steps
-            self.adaptive_reward_scale = self.base_reward_scale * (1.0 + progress_factor * (max_scale_factor - 1.0))
-        else:
-            # Use the current reward scale for initial steps
-            self.adaptive_reward_scale = self.reward_scale
-            
         if game_state.get('crashed', False):
             return -10.0  # Large penalty for crashing
 
         # Base survival reward
-        reward = 0.1 * self.adaptive_reward_scale
-        
-        # Score-based reward - progressive difficulty handling
+        reward = 0.1 * self.reward_scale
+
+        # Score-based reward
         current_score = game_state.get('score', self.last_score)
         score_diff = current_score - self.last_score
         speed = game_state.get('speed', 0)
+        is_obstacle_cleared = game_state.get('is_obstacle_cleared', self.prev_obstacle_cleared)
+        obstacle_len = game_state.get('obstacle_len', self.last_obstacle_len)
+        first_obstacle_x = game_state.get('first_obstacle_x', self.last_first_obstacle_x)
+
+        # Reward for clearing an obstacle
+        obstacle_cleared_event = False       
+        # 1. An obstacle's right edge passed the T-Rex (rising edge detection)
+        if is_obstacle_cleared and not self.prev_obstacle_cleared:
+            obstacle_cleared_event = True
+        # 2. An obstacle scrolled off screen (count decreased)
+        elif obstacle_len < self.last_obstacle_len:
+            obstacle_cleared_event = True
+        # 3. An obstacle was replaced by a new one
+        if (obstacle_len > 0 and self.last_obstacle_len == obstacle_len and
+              first_obstacle_x > self.last_first_obstacle_x and self.last_first_obstacle_x != -1):
+            obstacle_cleared_event = True
+        
+        if obstacle_cleared_event:
+            #self.logger.info("***************** Obstacle cleared! *****************")
+            reward += 2.0 * self.reward_scale  # Bonus for clearing an obstacle
 
         if score_diff > 0:
             # Higher reward for higher speeds (difficulty)
-            # Scale reward by speed, capping the factor to avoid extreme rewards
             speed_factor = min(2.0, speed / 10.0)
-            reward += score_diff * 0.1 * speed_factor * self.adaptive_reward_scale
-            
-            # Additional reward for efficient obstacle navigation (if score increased)
-            # Reward is higher if fewer actions were taken to achieve this progress
-            total_actions = sum(self.action_counts.values())
-            if total_actions > 0:
-                efficiency_factor = max(0.5, 1.0 - (total_actions / (current_score + 1)) * 0.1)
-                reward += score_diff * 0.05 * efficiency_factor * self.adaptive_reward_scale
-        
-        # Action efficiency rewards/penalties
-        if self.last_action is not None:
-            # Penalize excessive do-nothing (action 0) at higher speeds
-            if self.last_action == 0 and speed > 10:
-                reward -= 0.01 * self.adaptive_reward_scale
-            
-            # Penalize excessive consecutive jumping/ducking
-            if self.last_action in [1, 2, 3] and self.consecutive_same_actions > 2:
-                # Penalty increases with each additional consecutive action
-                reward -= (0.02 * (self.consecutive_same_actions - 2)) * self.adaptive_reward_scale
-        
+            reward += score_diff * 0.1 * speed_factor * self.reward_scale
+
         self.last_score = current_score
-        
+        self.prev_obstacle_cleared = is_obstacle_cleared
+        self.last_obstacle_len = obstacle_len
+        if first_obstacle_x != -1:
+            self.last_first_obstacle_x = first_obstacle_x
+
         return reward
 
     async def _async_reset(self) -> np.ndarray:
@@ -357,9 +372,10 @@ class DinoGameEnvironment(gym.Env):
                 await self.page.keyboard.press('ArrowUp', delay=200)
             elif action == 2:  # Short Jump
                 await self.page.keyboard.press('ArrowUp', delay=50)
+            '''
             elif action == 3:  # Duck
                 await self.page.keyboard.press('ArrowDown', delay=500)
-
+            '''
             # 2. Get the definitive state of the game after the action
             game_state = await self._get_game_state()
             terminated = game_state.get('crashed', False)
@@ -399,11 +415,9 @@ class DinoGameEnvironment(gym.Env):
         self.current_step = 0
         self.last_score = 0
         self.episode_reward = 0.0
-        
-        # Reset action tracking variables
-        self.last_action = None
-        self.action_counts = {0: 0, 1: 0, 2: 0, 3: 0}
-        self.consecutive_same_actions = 0
+        self.prev_obstacle_cleared = False
+        self.last_obstacle_len = 0
+        self.last_first_obstacle_x = -1
         
         # Ensure the game thread is alive
         if not self.game_thread.is_alive():
@@ -447,16 +461,8 @@ class DinoGameEnvironment(gym.Env):
             raise TimeoutError("The game thread did not respond to the reset command.")
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Executes one step in the environment.
-        Handles state tracking and communicates with the async game thread.
-        """
-        self.action_counts[action] += 1
-        if self.last_action == action:
-            self.consecutive_same_actions += 1
-        else:
-            self.consecutive_same_actions = 1
-        self.last_action = action
-        
+        """Executes one step in the environment."""
+
         # Send action to the game thread
         self.action_queue.put(action)
         try:
@@ -595,8 +601,9 @@ if __name__ == '__main__':
             plt.pause(0.5)
 
         total_reward = 0
-        for step_num in range(200):
+        for step_num in range(250):
             action = env.action_space.sample()
+            #action = 0
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             total_reward += reward
