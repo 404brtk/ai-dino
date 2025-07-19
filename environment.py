@@ -47,11 +47,14 @@ class DinoGameEnvironment(gym.Env):
 
         processed_height, processed_width = self.processed_size
 
-        self.observation_space = spaces.Box(
-            low=0.0, high=1.0,
-            shape=(self.frame_stack, processed_height, processed_width),
-            dtype=np.float32
-        )
+        self.observation_space = gym.spaces.Dict({
+            'frame': gym.spaces.Box(
+                low=0, high=255, shape=(self.frame_stack, processed_height, processed_width), dtype=np.float32
+            ),
+            'distance_to_obstacle': gym.spaces.Box(low=0, high=1000, shape=(1,), dtype=np.float32),
+            'obstacle_y_position': gym.spaces.Box(low=0, high=500, shape=(1,), dtype=np.float32),
+            'obstacle_width': gym.spaces.Box(low=0, high=500, shape=(1,), dtype=np.float32)
+        })
 
         # State and performance tracking
         self.current_step = 0
@@ -188,13 +191,24 @@ class DinoGameEnvironment(gym.Env):
                 self.logger.warning("Game canvas not found, using uncropped frame.")
 
             # 5. Process the frame (handles grayscale, resize, normalize, stacking)
-            return self.frame_processor.process_frame(raw_frame)
+            observation = {
+                'frame': self.frame_processor.process_frame(raw_frame),
+                'distance_to_obstacle': np.array([await self._get_distance_to_obstacle()], dtype=np.float32),
+                'obstacle_y_position': np.array([await self._get_obstacle_y_position()], dtype=np.float32),
+                'obstacle_width': np.array([await self._get_obstacle_width()], dtype=np.float32)
+            }
+            return observation
             
         except Exception as e:
             self.logger.error(f"Error in _capture_and_process_frame: {str(e)}", 
                             exc_info=self.logger.level <= logging.DEBUG)
             # Return a blank frame stack with correct shape
-            return np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32)
+            return {
+                'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
+                'distance_to_obstacle': np.array([1000], dtype=np.float32),
+                'obstacle_y_position': np.array([140], dtype=np.float32),
+                'obstacle_width': np.array([0], dtype=np.float32)
+            }
 
 
     async def _is_game_over(self) -> bool:
@@ -209,8 +223,24 @@ class DinoGameEnvironment(gym.Env):
         return int(''.join(digits))
     
     async def _get_current_speed(self) -> float:
-        """Retrieves the current speed."""
-        return await self.page.evaluate('() => window.Runner.instance_.currentSpeed')
+        """Retrieves the current speed, including any obstacle speed offset."""
+        return await self.page.evaluate('''
+            () => {
+                const runner = window.Runner.instance_;
+                let speedOffset = 0;
+
+                try {
+                    const obstacles = runner.horizon.obstacles;
+                    if (obstacles.length > 0 && 'speedOffset' in obstacles[0]) {
+                        speedOffset = obstacles[0].speedOffset;
+                    }
+                } catch (e) {
+                    speedOffset = 0;
+                }
+
+                return runner.currentSpeed + speedOffset;
+            }
+        ''')
 
     async def _is_first_obstacle_cleared(self) -> bool:
         """Returns True if the closest obstacle's right edge is behind the T-Rex (i.e., just cleared)."""
@@ -224,6 +254,78 @@ class DinoGameEnvironment(gym.Env):
             return (first.xPos + first.width) < tRexX;
         }
         """)
+        
+    async def _get_distance_to_obstacle(self) -> int:
+        """Returns the distance to the next obstacle (X position minus dino width)."""
+        try:
+            result = await self.page.evaluate("""
+            () => {
+                const runner = window.Runner.instance_;
+                const obstacles = runner.horizon.obstacles;
+                
+                if (!obstacles || obstacles.length === 0) {
+                    return { distance: 1000, hasObstacle: false };
+                }
+                
+                const firstObstacle = obstacles[0];
+                const dinoWidth = runner.tRex.config.widthDuck || 59;
+                const distance = Math.max(0, firstObstacle.xPos - dinoWidth);
+                
+                return { distance: distance, hasObstacle: true };
+            }
+        """)
+        
+            return result['distance']
+        except Exception as e:
+            self.logger.error(f"Error getting obstacle distance: {e}")
+            return 1000
+    
+    async def _get_obstacle_y_position(self) -> int:
+        """Returns the Y position of the next obstacle."""
+        try:
+            result = await self.page.evaluate("""
+            () => {
+                const runner = window.Runner.instance_;
+                const obstacles = runner.horizon.obstacles;
+                
+                if (!obstacles || obstacles.length === 0) {
+                    return 140; // Default ground level
+                }
+                
+                const firstObstacle = obstacles[0];
+                const pixels = 140; // Default height
+                const height = firstObstacle.typeConfig?.height || 0;
+                const yPos = firstObstacle.yPos || 0;
+                
+                return Math.max(0, pixels - (height + yPos));
+            }
+        """)
+        
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting obstacle Y position: {e}")
+            return 140
+    
+    async def _get_obstacle_width(self) -> int:
+        """Returns the width of the next obstacle."""
+        try:
+            result = await self.page.evaluate("""
+            () => {
+                const runner = window.Runner.instance_;
+                const obstacles = runner.horizon.obstacles;
+                
+                if (!obstacles || obstacles.length === 0) {
+                    return 0;
+                }
+                
+                return obstacles[0].width || 0;
+            }
+        """)
+        
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting obstacle width: {e}")
+            return 0
 
     async def _get_obstacle_len(self) -> int:
         """Returns the number of obstacles in the horizon."""
@@ -238,19 +340,42 @@ class DinoGameEnvironment(gym.Env):
         """Gets the current game state by calling helper methods."""
         try:
             # Use existing helper methods to fetch game state components
-            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x = await asyncio.gather(
+            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width = await asyncio.gather(
                 self._is_game_over(),
                 self._get_current_score(),
                 self._get_current_speed(),
                 self._is_first_obstacle_cleared(),
                 self._get_obstacle_len(),
-                self._get_first_obstacle_x()
+                self._get_first_obstacle_x(),
+                self._get_distance_to_obstacle(),
+                self._get_obstacle_y_position(),
+                self._get_obstacle_width()
             )
-            return {'crashed': crashed, 'score': score, 'speed': speed, 'is_obstacle_cleared': is_obstacle_cleared, 'obstacle_len': obstacle_len, 'first_obstacle_x': first_obstacle_x}
+            return {
+                'crashed': crashed, 
+                'score': score, 
+                'speed': speed, 
+                'is_obstacle_cleared': is_obstacle_cleared, 
+                'obstacle_len': obstacle_len, 
+                'first_obstacle_x': first_obstacle_x,
+                'obstacle_distance': obstacle_distance,
+                'obstacle_y': obstacle_y,
+                'obstacle_width': obstacle_width
+            }
         except PlaywrightError as e:
             self.logger.error(f"Error getting game state: {e}")
             # Return a default state indicating a crash
-            return {'crashed': True, 'score': 0, 'speed': 0, 'is_obstacle_cleared': False, 'obstacle_len': 0, 'first_obstacle_x': -1}
+            return {
+                'crashed': True, 
+                'score': 0, 
+                'speed': 0, 
+                'is_obstacle_cleared': False, 
+                'obstacle_len': 0, 
+                'first_obstacle_x': -1,
+                'obstacle_distance': 1000,
+                'obstacle_y': 140,
+                'obstacle_width': 0
+            }
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
@@ -340,7 +465,13 @@ class DinoGameEnvironment(gym.Env):
                             await asyncio.sleep(0.3)
                         else:
                             self.logger.error("All restart attempts failed. Returning zero state.")
-                            return np.zeros(self.observation_space.shape, dtype=np.float32)
+                            initial_observation = {
+                                'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
+                                'distance_to_obstacle': np.array([1000], dtype=np.float32),
+                                'obstacle_y_position': np.array([140], dtype=np.float32),
+                                'obstacle_width': np.array([0], dtype=np.float32)
+                            }
+                            return initial_observation
                     else:
                         await asyncio.sleep(0.5)  # Wait before next attempt
 
@@ -385,8 +516,13 @@ class DinoGameEnvironment(gym.Env):
 
             # 4. Capture the visual observation
             observation = await self._capture_and_process_frame()
-            if observation is None:
-                observation = np.zeros(self.observation_space.shape, dtype=np.float32)
+            if observation['frame'] is None:
+                observation = {
+                    'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
+                    'distance_to_obstacle': np.array([1000], dtype=np.float32),
+                    'obstacle_y_position': np.array([140], dtype=np.float32),
+                    'obstacle_width': np.array([0], dtype=np.float32)
+                }
                 self.logger.warning("Failed to capture frame, returning blank observation.")
 
             # 5. Update internal state and prepare return values
@@ -589,12 +725,23 @@ if __name__ == '__main__':
     try:
         env = DinoGameEnvironment(headless=False)
         obs, info = env.reset()
-        print(f"Initial state shape: {obs.shape}, dtype: {obs.dtype}")
+        
+        # Handle dictionary observation
+        if isinstance(obs, dict):
+            print(f"Frame shape: {obs['frame'].shape}")
+            print(f"Distance: {obs['distance_to_obstacle'][0]:.1f}")
+            print(f"Y position: {obs['obstacle_y_position'][0]:.1f}")
+            print(f"Width: {obs['obstacle_width'][0]:.1f}")
+            frame_data = obs['frame']
+        else:
+            print(f"Observation shape: {obs.shape}")
+            frame_data = obs
+            
         print(f"Action space: {env.action_space}")
 
-        if args.visualize and obs is not None:
+        if args.visualize and frame_data is not None:
             for i in range(4):
-                axes[i].imshow(obs[i], cmap='gray')
+                axes[i].imshow(frame_data[i], cmap='gray')
                 axes[i].set_title(f"Frame {i+1}")
                 axes[i].axis('off')
             plt.tight_layout()
@@ -607,20 +754,34 @@ if __name__ == '__main__':
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             total_reward += reward
-            print(f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, Score={info['score']}, Done={done}")
+            
+            # Extract obstacle info for logging
+            if isinstance(obs, dict):
+                distance = obs['distance_to_obstacle'][0]
+                y_pos = obs['obstacle_y_position'][0]
+                width = obs['obstacle_width'][0]
+                print(f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, "
+                      f"Score={info['score']}, Distance={distance:.1f}, Y={y_pos:.1f}, "
+                      f"Width={width:.1f}, Done={done}")
+                frame_data = obs['frame']
+            else:
+                print(f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, "
+                      f"Score={info['score']}, Done={done}")
+                frame_data = obs
 
-            if args.visualize and obs is not None:
+            if args.visualize and frame_data is not None:
                 for i in range(4):
-                    axes[i].imshow(obs[i], cmap='gray')
-                plt.pause(0.01) # Update plot
+                    axes[i].imshow(frame_data[i], cmap='gray')
+                plt.pause(0.01)
 
             if done:
                 print(f"Episode finished after {step_num+1} steps! Resetting...")
                 obs, info = env.reset()
                 total_reward = 0
-                if args.visualize and obs is not None:
+                if args.visualize and isinstance(obs, dict):
+                    frame_data = obs['frame']
                     for i in range(4):
-                        axes[i].imshow(obs[i], cmap='gray')
+                        axes[i].imshow(frame_data[i], cmap='gray')
                     plt.pause(0.5)
 
     except (Exception, TimeoutError) as e:
