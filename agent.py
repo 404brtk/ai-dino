@@ -11,16 +11,19 @@ from utils import PrioritizedReplayBuffer, EpsilonGreedy
 class DQN(nn.Module):
     """Deep Q-Network model for processing game frames."""
     
-    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int):
+    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 3, use_numerical: bool = True):
         """
         Initializes the DQN model with convolutional and fully connected layers.
 
         Args:
-            input_shape (Tuple[int, int, int]): The shape of the input state (C, H, W).
-            n_actions (int): The number of possible actions.
+            input_shape: Shape of visual input (C, H, W)
+            n_actions: Number of possible actions
+            numerical_input_size: Size of numerical feature vector
+            use_numerical: Whether to use numerical features
         """
         super(DQN, self).__init__()
-
+        self.use_numerical = use_numerical
+        
         # Convolutional layers for feature extraction from frames
         self.conv = nn.Sequential(
             nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4),
@@ -34,10 +37,24 @@ class DQN(nn.Module):
 
         # Calculate conv output size after adaptive pooling
         conv_out_size = 64 * 7 * 7
-
+        
+        if self.use_numerical:
+            # Numerical feature processor
+            self.numerical_fc = nn.Sequential(
+                nn.Linear(numerical_input_size, 64),
+                nn.ReLU(),
+                nn.Linear(64, 32),
+                nn.ReLU()
+            )
+            
+            # Combined feature processor
+            combined_size = conv_out_size + 32
+        else:
+            combined_size = conv_out_size
+        
         # Fully connected layers for Q-value estimation
         self.fc = nn.Sequential(
-            nn.Linear(conv_out_size, 512),
+            nn.Linear(combined_size, 512),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(512, 256),
@@ -46,11 +63,23 @@ class DQN(nn.Module):
             nn.Linear(256, n_actions)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, visual_input: torch.Tensor, numerical_input: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Defines the forward pass of the DQN."""
-        conv_out = self.conv(x)
-        flat = torch.flatten(conv_out, 1)
-        return self.fc(flat)
+
+        # Process visual features
+        conv_out = self.conv(visual_input)
+        visual_features = torch.flatten(conv_out, 1)
+        
+        if self.use_numerical and numerical_input is not None:
+            # Process numerical features
+            numerical_features = self.numerical_fc(numerical_input)
+            
+            # Combine features
+            combined_features = torch.cat([visual_features, numerical_features], dim=1)
+        else:
+            combined_features = visual_features
+        
+        return self.fc(combined_features)
 
 
 class DQNAgent:
@@ -61,7 +90,7 @@ class DQNAgent:
                  buffer_size: int = 100000, batch_size: int = 32,
                  target_update_freq: int = 1000, device: str = 'cuda',
                  start_eps: float = 1.0, end_eps: float = 0.01,
-                 decay_steps: int = 10000):
+                 decay_steps: int = 10000, use_numerical: bool = True):
         """
         Initialize DQN Agent.
         
@@ -77,6 +106,7 @@ class DQNAgent:
             start_eps: Initial epsilon value
             end_eps: Final epsilon value
             decay_steps: Number of steps to decay from start to end
+            use_numerical: Whether to use numerical features
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.n_actions = n_actions
@@ -87,10 +117,11 @@ class DQNAgent:
         self.start_eps = start_eps
         self.end_eps = end_eps
         self.decay_steps = decay_steps
-        
+        self.use_numerical = use_numerical
+
         # Networks
-        self.q_network = DQN(input_shape, n_actions).to(self.device)
-        self.target_network = DQN(input_shape, n_actions).to(self.device)
+        self.q_network = DQN(input_shape, n_actions, use_numerical=use_numerical).to(self.device)
+        self.target_network = DQN(input_shape, n_actions, use_numerical=use_numerical).to(self.device)
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=lr)
         
         # Initialize target network
@@ -107,7 +138,28 @@ class DQNAgent:
         """Copy weights from main network to target network."""
         self.target_network.load_state_dict(self.q_network.state_dict())
 
-    def select_action(self, state: np.ndarray, training: bool = True) -> int:
+    def _extract_features(self, state):
+        """Extract visual and numerical features from state."""
+        if isinstance(state, dict):
+            # Dictionary observation
+            visual_data = state['frame']
+            if self.use_numerical:
+                numerical_data = np.array([
+                    state['distance_to_obstacle'][0],
+                    state['obstacle_y_position'][0],
+                    state['obstacle_width'][0]
+                ], dtype=np.float32)
+            else:
+                numerical_data = None
+        else:
+            # Simple array observation (backward compatibility)
+            visual_data = state
+            numerical_data = None
+            
+        return visual_data, numerical_data
+      
+
+    def select_action(self, state, training: bool = True) -> int:
         """
         Select action using epsilon-greedy or greedy policy.
         
@@ -118,10 +170,15 @@ class DQNAgent:
         Returns:
             Selected action
         """
-        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        visual_data, numerical_data = self._extract_features(state)
+        
+        visual_tensor = torch.FloatTensor(visual_data).unsqueeze(0).to(self.device)
+        numerical_tensor = None
+        if numerical_data is not None:
+            numerical_tensor = torch.FloatTensor(numerical_data).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            q_values = self.q_network(state_tensor).squeeze(0)
+            q_values = self.q_network(visual_tensor, numerical_tensor).squeeze(0)
         
         epsilon = self.epsilon_greedy.get_epsilon() if training else 0.0
         
@@ -130,11 +187,18 @@ class DQNAgent:
         else:
             return q_values.argmax().item()
 
-    def store_experience(self, state: np.ndarray, action: int, reward: float,
-                        next_state: np.ndarray, done: bool):
-        """Store experience in replay buffer."""
-        # For the first experience, we don't have a TD error yet, so add with max priority
-        self.replay_buffer.add((state, action, reward, next_state, done))
+
+    def store_experience(self, state, action: int, reward: float, next_state, done: bool):
+        """Store experience with feature extraction."""
+        # Extract features for both states
+        visual_state, numerical_state = self._extract_features(state)
+        visual_next_state, numerical_next_state = self._extract_features(next_state)
+        
+        # Store as tuple (visual, numerical) for each state
+        state_tuple = (visual_state, numerical_state)
+        next_state_tuple = (visual_next_state, numerical_next_state)
+        
+        self.replay_buffer.add((state_tuple, action, reward, next_state_tuple, done))
 
     def train_step(self) -> Optional[float]:
         """
@@ -146,34 +210,46 @@ class DQNAgent:
         if len(self.replay_buffer) < self.batch_size:
             return None
 
-        # Sample batch from replay buffer
         experiences, indices, weights = self.replay_buffer.sample(self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*experiences)
+        state_tuples, actions, rewards, next_state_tuples, dones = zip(*experiences)
+
+        # Separate visual and numerical data
+        visual_states = []
+        numerical_states = []
+        visual_next_states = []
+        numerical_next_states = []
+
+        for (vis_state, num_state), (vis_next_state, num_next_state) in zip(state_tuples, next_state_tuples):
+            visual_states.append(vis_state)
+            numerical_states.append(num_state if num_state is not None else np.zeros(3))
+            visual_next_states.append(vis_next_state)
+            numerical_next_states.append(num_next_state if num_next_state is not None else np.zeros(3))
 
         # Convert to tensors
-        states = torch.FloatTensor(np.array(states)).to(self.device)
+        visual_states = torch.FloatTensor(np.array(visual_states)).to(self.device)
+        numerical_states = torch.FloatTensor(np.array(numerical_states)).to(self.device) if self.use_numerical else None
+        visual_next_states = torch.FloatTensor(np.array(visual_next_states)).to(self.device)
+        numerical_next_states = torch.FloatTensor(np.array(numerical_next_states)).to(self.device) if self.use_numerical else None
+        
         actions = torch.LongTensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
-        next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
         dones = torch.BoolTensor(dones).to(self.device)
         weights = torch.FloatTensor(weights).to(self.device)
 
         # Current Q values
-        current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
+        current_q_values = self.q_network(visual_states, numerical_states).gather(1, actions.unsqueeze(1))
 
-        # Next Q values from target network (Double DQN)
+        # Next Q values (Double DQN)
         with torch.no_grad():
-            next_actions = self.q_network(next_states).argmax(1)
-            next_q_values = self.target_network(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+            next_actions = self.q_network(visual_next_states, numerical_next_states).argmax(1)
+            next_q_values = self.target_network(visual_next_states, numerical_next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target_q_values = rewards + (self.gamma * next_q_values * ~dones)
 
-        # Compute TD errors for priority updates
+        # Compute TD errors
         td_errors = torch.abs(target_q_values - current_q_values.squeeze(1)).detach().cpu().numpy()
-
-        # Update priorities in the replay buffer
         self.replay_buffer.update_priorities(indices, td_errors)
 
-        # Compute loss with importance sampling weights
+        # Compute loss
         loss = (weights * self.criterion(current_q_values, target_q_values.unsqueeze(1))).mean()
 
         # Optimize
