@@ -84,7 +84,10 @@ class DinoTrainer:
                     frame_stack=self.config.frame_stack,
                     processed_size=self.config.processed_size,
                     max_episode_steps=self.config.max_episode_steps,
-                    reward_scale=self.config.reward_scale
+                    reward_scale=self.config.reward_scale,
+                    use_visual=getattr(self.config, 'use_visual', False),
+                    use_numerical=getattr(self.config, 'use_numerical', True),
+                    normalize_numerical=getattr(self.config, 'normalize_numerical', True)
                 )
                 self.logger.info("Environment initialized successfully!")
                 return
