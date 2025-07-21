@@ -267,15 +267,22 @@ class DinoTrainer:
             # Load model
             self.agent.load_model(checkpoint_path)
             
-            # Try to load corresponding training state
-            state_path = checkpoint_path.replace('model_', 'training_state_').replace('.pth', '.json')
-            if checkpoint_path.endswith('best_model.pth'):
+           # Try to load corresponding training state
+            if checkpoint_path.endswith('final_model.pth'):
+                # For final model, look for final_training_state.json
+                state_path = os.path.join(self.config.checkpoint_dir, 'final_training_state.json')
+            elif checkpoint_path.endswith('best_model.pth'):
                 # Look for the most recent training state
                 pattern = os.path.join(self.config.checkpoint_dir, 'training_state_ep*.json')
                 state_files = glob.glob(pattern)
                 if state_files:
                     state_files.sort(key=lambda x: int(x.split('_ep')[1].split('.')[0]))
                     state_path = state_files[-1]
+                else:
+                    state_path = None
+            else:
+                # Regular checkpoint
+                state_path = checkpoint_path.replace('model_', 'training_state_').replace('.pth', '.json')
             
             if os.path.exists(state_path):
                 with open(state_path, 'r') as f:
