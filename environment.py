@@ -29,7 +29,6 @@ class DinoGameEnvironment(gym.Env):
     }
 
     def __init__(self,
-                 headless: bool = False,
                  frame_stack: int = 4,
                  processed_size: Tuple[int, int] = (84, 84),
                  max_episode_steps: int = 10000,
@@ -40,7 +39,7 @@ class DinoGameEnvironment(gym.Env):
         super().__init__()
 
         # Core parameters
-        self.headless = headless
+        self.headless = False
         self.frame_stack = frame_stack
         self.processed_size = processed_size
         self.max_episode_steps = max_episode_steps
@@ -745,7 +744,7 @@ class DinoGameEnvironment(gym.Env):
             # Don't re-raise, as this is a cleanup method
 
     def render(self, mode='human'):
-        """Renders the environment. Not implemented for this headless setup."""
+        """Renders the environment."""
         pass
         
     async def _recover_browser_session(self):
@@ -814,7 +813,6 @@ if __name__ == '__main__':
 
     try:
         env = DinoGameEnvironment(
-            headless=False, 
             normalize_numerical=not args.no_normalize,
             use_visual=args.visualize,  
             use_numerical=True

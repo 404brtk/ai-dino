@@ -11,13 +11,12 @@ class TrainingConfig:
     
     def __init__(self):
         # Environment parameters
-        self.headless = False
         self.frame_stack = 4
         self.processed_size = (84, 84)
         self.max_episode_steps = 10000
         self.reward_scale = 1.0
         self.normalize_numerical = True
-        
+
         # Agent parameters
         self.lr = 0.0001
         self.gamma = 0.99

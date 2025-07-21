@@ -80,7 +80,6 @@ class DinoTrainer:
                     self.env.close()
                 
                 self.env = DinoGameEnvironment(
-                    headless=self.config.headless,
                     frame_stack=self.config.frame_stack,
                     processed_size=self.config.processed_size,
                     max_episode_steps=self.config.max_episode_steps,
@@ -494,7 +493,6 @@ def main():
     
     # Training parameters
     parser.add_argument('--episodes', type=int, default=None, help='Number of training episodes')
-    parser.add_argument('--headless', action='store_true', help='Run in headless mode')
     parser.add_argument('--lr', type=float, default=None, help='Learning rate')
     parser.add_argument('--batch-size', type=int, default=None, help='Batch size')
     parser.add_argument('--buffer-size', type=int, default=None, help='Replay buffer size')
@@ -521,9 +519,6 @@ def main():
     # Update config based on arguments
     if args.episodes is not None:
         config.total_episodes = args.episodes
-    
-    if args.headless:
-        config.headless = True
     
     if args.lr is not None:
         config.lr = args.lr

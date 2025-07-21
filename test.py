@@ -20,13 +20,12 @@ logger = logging.getLogger("dino_test")
 class DinoTester:
     """Class for testing a trained DQN agent on the Chrome Dino game."""
     
-    def __init__(self, model_path: str, headless: bool = False, device: str = 'auto'):
+    def __init__(self, model_path: str, device: str = 'auto'):
         """
         Initialize the tester with a trained model.
         
         Args:
             model_path: Path to the trained model (.pth file)
-            headless: Whether to run in headless mode
             device: Device to run on ('auto', 'cuda', 'cpu')
         """
         self.logger = logging.getLogger("dino_test")
@@ -58,7 +57,6 @@ class DinoTester:
         # Initialize environment with model configuration
         self.logger.info("Initializing environment...")
         self.env = DinoGameEnvironment(
-            headless=headless,
             frame_stack=self.frame_stack,
             processed_size=self.processed_size,
             max_episode_steps=100000,  # Set a high value for testing
@@ -233,8 +231,6 @@ def main():
                        help='Path to the model file (.pth)')
     parser.add_argument('--episodes', type=int, default=5,
                        help='Number of test episodes to run')
-    parser.add_argument('--headless', action='store_true',
-                       help='Run in headless mode (no browser UI)')
     parser.add_argument('--device', type=str, choices=['auto', 'cuda', 'cpu'],
                        default='auto', help='Device to use')
     parser.add_argument('--delay', type=float, default=None,
@@ -255,7 +251,6 @@ def main():
         # Create tester and run tests
         tester = DinoTester(
             model_path=args.model,
-            headless=args.headless,
             device=args.device
         )
         
