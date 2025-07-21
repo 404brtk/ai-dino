@@ -237,8 +237,8 @@ class DQNAgent:
                 visual_next_states.append(vis_next_state if vis_next_state is not None else np.zeros((4, 84, 84)))
             
             if self.use_numerical:
-                numerical_states.append(num_state if num_state is not None else np.zeros(3))
-                numerical_next_states.append(num_next_state if num_next_state is not None else np.zeros(3))
+                numerical_states.append(num_state if num_state is not None else np.zeros(4))
+                numerical_next_states.append(num_next_state if num_next_state is not None else np.zeros(4))
 
         # Convert to tensors
         visual_states_tensor = None
