@@ -25,7 +25,8 @@ class DinoGameEnvironment(gym.Env):
     GAME_CONSTANTS = {
         'distance_to_obstacle': {'min': 0, 'max': 600, 'default': 600},
         'obstacle_y_position': {'min': 80, 'max': 150, 'default': 140},
-        'obstacle_width': {'min': 15, 'max': 75, 'default': 0}
+        'obstacle_width': {'min': 15, 'max': 80, 'default': 0},
+        'current_speed': {'min': 6, 'max': 150, 'default': 6}
     }
 
     def __init__(self,
@@ -61,7 +62,7 @@ class DinoGameEnvironment(gym.Env):
             self.frame_processor = None
 
         # Gym-specific definitions
-        self.action_space = spaces.Discrete(4)  # 0: Do Nothing, 1: Long Jump, 2: Short Jump, 3: Duck
+        self.action_space = spaces.Discrete(3)  # 0: Do Nothing, 1: Jump, 2: Duck
 
         processed_height, processed_width = self.processed_size
 
@@ -79,7 +80,8 @@ class DinoGameEnvironment(gym.Env):
                 observation_spaces.update({
                     'distance_to_obstacle': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
                     'obstacle_y_position': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                    'obstacle_width': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+                    'obstacle_width': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
+                    'current_speed': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
                 })
             else:
                 # Raw game values
@@ -97,6 +99,11 @@ class DinoGameEnvironment(gym.Env):
                     'obstacle_width': gym.spaces.Box(
                         low=self.GAME_CONSTANTS['obstacle_width']['min'], 
                         high=self.GAME_CONSTANTS['obstacle_width']['max'], 
+                        shape=(1,), dtype=np.float32
+                    ),
+                    'current_speed': gym.spaces.Box(
+                        low=self.GAME_CONSTANTS['current_speed']['min'], 
+                        high=self.GAME_CONSTANTS['current_speed']['max'], 
                         shape=(1,), dtype=np.float32
                     )
                 })
@@ -165,16 +172,20 @@ class DinoGameEnvironment(gym.Env):
                 width_default = self._normalize_numerical_feature(
                     self.GAME_CONSTANTS['obstacle_width']['default'], 'obstacle_width'
                 )
+                speed_default = self._normalize_numerical_feature(
+                    self.GAME_CONSTANTS['current_speed']['default'], 'current_speed'
+                )
             else:
                 # Raw values
                 distance_default = float(self.GAME_CONSTANTS['distance_to_obstacle']['default'])
                 y_default = float(self.GAME_CONSTANTS['obstacle_y_position']['default'])
                 width_default = float(self.GAME_CONSTANTS['obstacle_width']['default'])
-            
+                speed_default = float(self.GAME_CONSTANTS['current_speed']['default'])            
             observation.update({
                 'distance_to_obstacle': np.array([distance_default], dtype=np.float32),
                 'obstacle_y_position': np.array([y_default], dtype=np.float32),
-                'obstacle_width': np.array([width_default], dtype=np.float32)
+                'obstacle_width': np.array([width_default], dtype=np.float32),
+                'current_speed': np.array([speed_default], dtype=np.float32)
             })
         
         return observation
@@ -270,6 +281,7 @@ class DinoGameEnvironment(gym.Env):
                 distance = await self._get_distance_to_obstacle()
                 y_position = await self._get_obstacle_y_position()
                 width = await self._get_obstacle_width()
+                speed = await self._get_current_speed()
 
                 observation.update({
                     'distance_to_obstacle': np.array([
@@ -280,6 +292,9 @@ class DinoGameEnvironment(gym.Env):
                     ], dtype=np.float32),
                     'obstacle_width': np.array([
                         self._normalize_numerical_feature(width, 'obstacle_width')
+                    ], dtype=np.float32),
+                    'current_speed': np.array([
+                        self._normalize_numerical_feature(speed, 'current_speed')
                     ], dtype=np.float32)
                 })
 
@@ -331,24 +346,28 @@ class DinoGameEnvironment(gym.Env):
     
     async def _get_current_speed(self) -> float:
         """Retrieves the current speed, including any obstacle speed offset."""
-        return await self.page.evaluate('''
-            () => {
-                const runner = window.Runner.instance_;
-                let speedOffset = 0;
+        try:
+            return await self.page.evaluate('''
+                () => {
+                    const runner = window.Runner.instance_;
+                    let speedOffset = 0;
 
-                try {
-                    const obstacles = runner.horizon.obstacles;
-                    if (obstacles.length > 0 && 'speedOffset' in obstacles[0]) {
-                        speedOffset = obstacles[0].speedOffset;
+                    try {
+                        const obstacles = runner.horizon.obstacles;
+                        if (obstacles.length > 0 && 'speedOffset' in obstacles[0]) {
+                            speedOffset = obstacles[0].speedOffset;
+                        }
+                    } catch (e) {
+                        speedOffset = 0;
                     }
-                } catch (e) {
-                    speedOffset = 0;
+
+                    return runner.currentSpeed + speedOffset;
                 }
-
-                return runner.currentSpeed + speedOffset;
-            }
-        ''')
-
+            ''')
+        except Exception as e:
+            self.logger.error(f"Error getting current speed: {e}")
+            return float(self.GAME_CONSTANTS['current_speed']['default'])
+    
     async def _is_first_obstacle_cleared(self) -> bool:
         """Returns True if the closest obstacle's right edge is behind the T-Rex (i.e., just cleared)."""
         return await self.page.evaluate("""
@@ -472,13 +491,13 @@ class DinoGameEnvironment(gym.Env):
             return {
                 'crashed': True, 
                 'score': 0, 
-                'speed': 0, 
+                'speed': self.GAME_CONSTANTS['current_speed']['default'], 
                 'is_obstacle_cleared': False, 
                 'obstacle_len': 0, 
                 'first_obstacle_x': -1,
                 'obstacle_distance': self.GAME_CONSTANTS['distance_to_obstacle']['default'],
                 'obstacle_y': self.GAME_CONSTANTS['obstacle_y_position']['default'],
-                'obstacle_width': self.GAME_CONSTANTS['obstacle_width']['default']
+                'obstacle_width': self.GAME_CONSTANTS['obstacle_width']['default'],
             }
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
@@ -516,7 +535,7 @@ class DinoGameEnvironment(gym.Env):
 
         if score_diff > 0:
             # Higher reward for higher speeds (difficulty)
-            speed_factor = min(2.0, speed / 10.0)
+            speed_factor = min(2.0, speed / 5.0)
             reward += score_diff * 0.1 * speed_factor * self.reward_scale
 
         self.last_score = current_score
@@ -598,10 +617,8 @@ class DinoGameEnvironment(gym.Env):
         try:
             # 1. Perform action in browser
             if action == 1:  # Long Jump
-                await self.page.keyboard.press('ArrowUp', delay=200)
-            elif action == 2:  # Short Jump
-                await self.page.keyboard.press('ArrowUp', delay=50)
-            elif action == 3:  # Duck
+                await self.page.keyboard.press('ArrowUp', delay=100)
+            elif action == 2:  # Duck
                 await self.page.keyboard.press('ArrowDown', delay=400)
             # action == 0: Do Nothing
             
@@ -832,6 +849,7 @@ if __name__ == '__main__':
                 print(f"Distance: {obs['distance_to_obstacle'][0]:.3f}")
                 print(f"Y position: {obs['obstacle_y_position'][0]:.3f}")
                 print(f"Width: {obs['obstacle_width'][0]:.3f}")
+                print(f"Current speed: {obs['current_speed'][0]:.3f}")
         else:
             print(f"Observation shape: {obs.shape}")
             frame_data = obs
@@ -865,7 +883,8 @@ if __name__ == '__main__':
                     distance = obs['distance_to_obstacle'][0]
                     y_pos = obs['obstacle_y_position'][0]
                     width = obs['obstacle_width'][0]
-                    log_str += f", Distance={distance:.3f}, Y={y_pos:.3f}, Width={width:.3f}"
+                    speed = obs['current_speed'][0]
+                    log_str += f", Distance={distance:.3f}, Y={y_pos:.3f}, Width={width:.3f}, Speed={speed:.3f}"
                 
                 log_str += f", Done={done}"
                 print(log_str)
