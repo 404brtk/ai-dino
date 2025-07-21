@@ -44,17 +44,27 @@ class DinoTester:
             
         self.logger.info(f"Using device: {self.device}")
         
+        # Load model configuration first
+        checkpoint = torch.load(self.model_path, map_location='cpu')
+        self.use_visual = checkpoint.get('use_visual', False)
+        self.use_numerical = checkpoint.get('use_numerical', True)
+        
+        self.logger.info(f"Model configuration - Visual: {self.use_visual}, Numerical: {self.use_numerical}")
+        
         # Environment settings
         self.frame_stack = 4
         self.processed_size = (84, 84)
         
-        # Initialize environment
+        # Initialize environment with model configuration
         self.logger.info("Initializing environment...")
         self.env = DinoGameEnvironment(
             headless=headless,
             frame_stack=self.frame_stack,
             processed_size=self.processed_size,
-            max_episode_steps=100000  # Set a high value for testing
+            max_episode_steps=100000,  # Set a high value for testing
+            use_visual=self.use_visual,
+            use_numerical=self.use_numerical,
+            normalize_numerical=True
         )
         
         # Initialize and load agent
@@ -64,12 +74,14 @@ class DinoTester:
         """Initialize the agent and load the model."""
         self.logger.info(f"Loading model from: {self.model_path}")
         
-        # Create agent
+        # Create agent with proper configuration
         input_shape = (self.frame_stack, *self.processed_size)
         self.agent = DQNAgent(
             input_shape=input_shape,
             n_actions=self.env.action_space.n,
-            device=self.device
+            device=self.device,
+            use_visual=self.use_visual,
+            use_numerical=self.use_numerical
         )
         
         # Load model
@@ -110,10 +122,6 @@ class DinoTester:
             episode_steps += 1
             episode_score = info.get('score', 0)
             
-            # Optional rendering
-            if render and episode_steps % 10 == 0:
-                self.logger.info(f"Step: {episode_steps}, Score: {episode_score}, Action: {action}")
-            
             # Optional delay for visualization
             if delay is not None:
                 time.sleep(delay)
@@ -137,6 +145,7 @@ class DinoTester:
         self.logger.info(f"Final score: {episode_score}")
         self.logger.info(f"Steps: {episode_steps}")
         self.logger.info(f"Duration: {duration:.2f} seconds")
+        self.logger.info(f"Steps per second: {steps_per_sec:.2f}")
         
         return results
     
@@ -153,10 +162,12 @@ class DinoTester:
             Dictionary with test statistics
         """
         self.logger.info(f"Running {num_episodes} test episodes...")
+        self.logger.info(f"Configuration: Visual={self.use_visual}, Numerical={self.use_numerical}")
         
         scores = []
         rewards = []
         steps = []
+        durations = []
         
         try:
             for episode in range(1, num_episodes + 1):
@@ -166,8 +177,10 @@ class DinoTester:
                 scores.append(result['score'])
                 rewards.append(result['reward'])
                 steps.append(result['steps'])
+                durations.append(result['duration'])
                 
-                self.logger.info(f"Episode {episode} complete | Score: {result['score']}\n")
+                self.logger.info(f"Episode {episode} complete | Score: {result['score']} | "
+                                f"Reward: {result['reward']:.2f}\n")
         
         except KeyboardInterrupt:
             self.logger.info("Testing interrupted by user")
@@ -181,11 +194,13 @@ class DinoTester:
                 'min_score': np.min(scores) if scores else 0,
                 'std_score': np.std(scores) if scores else 0,
                 'avg_reward': np.mean(rewards) if rewards else 0,
-                'avg_steps': np.mean(steps) if steps else 0
+                'avg_steps': np.mean(steps) if steps else 0,
+                'avg_duration': np.mean(durations) if durations else 0,
+                'total_duration': np.sum(durations) if durations else 0
             }
             
             # Display results
-            self.logger.info("\n--- Test Results ---")
+            self.logger.info("\n=== Test Results ===")
             self.logger.info(f"Episodes completed: {stats['episodes_completed']}/{num_episodes}")
             self.logger.info(f"Average score: {stats['avg_score']:.2f}")
             self.logger.info(f"Max score: {stats['max_score']}")
@@ -193,6 +208,17 @@ class DinoTester:
             self.logger.info(f"Score std dev: {stats['std_score']:.2f}")
             self.logger.info(f"Average reward: {stats['avg_reward']:.2f}")
             self.logger.info(f"Average steps: {stats['avg_steps']:.2f}")
+            self.logger.info(f"Average duration: {stats['avg_duration']:.2f} seconds")
+            self.logger.info(f"Total test time: {stats['total_duration']:.2f} seconds")
+            
+            # Additional performance metrics
+            if stats['episodes_completed'] > 0:
+                success_rate = len([s for s in scores if s > 0]) / stats['episodes_completed']
+                self.logger.info(f"Success rate (score > 0): {success_rate:.2%}")
+                
+                if stats['avg_duration'] > 0:
+                    avg_steps_per_sec = stats['avg_steps'] / stats['avg_duration']
+                    self.logger.info(f"Average steps per second: {avg_steps_per_sec:.2f}")
             
             # Close environment
             self.env.close()
@@ -213,20 +239,40 @@ def main():
                        default='auto', help='Device to use')
     parser.add_argument('--delay', type=float, default=None,
                        help='Delay between steps in seconds (to slow down visualization)')
+    parser.add_argument('--no-render', action='store_true',
+                       help='Disable progress rendering (run silently)')
     
     args = parser.parse_args()
     
-    # Create tester and run tests
-    tester = DinoTester(
-        model_path=args.model,
-        headless=args.headless,
-        device=args.device
-    )
+    # Validate arguments
+    if args.delay is not None and args.delay < 0:
+        raise ValueError("Delay must be non-negative")
     
-    tester.test(
-        num_episodes=args.episodes,
-        delay=args.delay
-    )
+    if args.episodes <= 0:
+        raise ValueError("Number of episodes must be positive")
+    
+    try:
+        # Create tester and run tests
+        tester = DinoTester(
+            model_path=args.model,
+            headless=args.headless,
+            device=args.device
+        )
+        
+        tester.test(
+            num_episodes=args.episodes,
+            render=not args.no_render,
+            delay=args.delay
+        )
+        
+    except FileNotFoundError as e:
+        logger.error(f"Model file error: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Testing failed with error: {e}", exc_info=True)
+        return 1
+    
+    return 0
 
 if __name__ == '__main__':
-    main()
+    exit(main())
