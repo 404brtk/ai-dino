@@ -124,23 +124,22 @@ class PrioritizedReplayBuffer:
         self.alpha = alpha
         self.beta = beta
         self.beta_increment = beta_increment
-        self.buffer = []
+        
+        self.buffer = deque(maxlen=capacity)
         self.priorities = deque(maxlen=capacity)
-        self.position = 0
+        self.max_priority = 1.0
 
     def add(self, experience: Tuple, priority: float = None):
         """Add experience with priority."""
         if priority is None:
-            priority = max(self.priorities) if self.priorities else 1.0
+            priority = self.max_priority
         
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(experience)
-            self.priorities.append(priority)
-        else:
-            self.buffer[self.position] = experience
-            self.priorities[self.position] = priority
-            
-        self.position = (self.position + 1) % self.capacity
+        self.buffer.append(experience)
+        self.priorities.append(priority)
+        
+        # Update max priority
+        if priority > self.max_priority:
+            self.max_priority = priority
 
     def sample(self, batch_size: int) -> Tuple[List, np.ndarray, np.ndarray]:
         """Sample batch with prioritized sampling."""
@@ -148,7 +147,7 @@ class PrioritizedReplayBuffer:
             return [], np.array([]), np.array([])
         
         # Calculate sampling probabilities
-        priorities = np.array(self.priorities)
+        priorities = np.array(list(self.priorities))
         probabilities = priorities ** self.alpha
         probabilities /= probabilities.sum()
         
@@ -170,12 +169,15 @@ class PrioritizedReplayBuffer:
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
         """Update priorities for sampled experiences."""
         for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority + 1e-6  # Small epsilon to avoid zero priority
+            if 0 <= idx < len(self.priorities):
+                new_priority = priority + 1e-6  # Small epsilon to avoid zero priority
+                self.priorities[idx] = new_priority
+                if new_priority > self.max_priority:
+                    self.max_priority = new_priority
 
     def __len__(self) -> int:
         """Return the current number of stored experiences."""
         return len(self.buffer)
-
 
 class EpsilonGreedy:
     """Epsilon-greedy exploration strategy with decay."""
@@ -208,7 +210,6 @@ class EpsilonGreedy:
         epsilon = self.peek()
         self.step += 1
         return epsilon
-
 
 class FrameProcessor:
     """Frame processing utilities for game observations."""
