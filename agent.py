@@ -162,7 +162,8 @@ class DQNAgent:
                 numerical_data = np.array([
                     state['distance_to_obstacle'][0],
                     state['obstacle_y_position'][0],
-                    state['obstacle_width'][0]
+                    state['obstacle_width'][0],
+                    state['current_speed'][0]
                 ], dtype=np.float32)
             else:
                 numerical_data = None
