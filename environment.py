@@ -19,15 +19,24 @@ from utils import FrameProcessor
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 class DinoGameEnvironment(gym.Env):
-
+    
     metadata = {'render.modes': ['human', 'rgb_array']}
+    
+    GAME_CONSTANTS = {
+        'distance_to_obstacle': {'min': 0, 'max': 600, 'default': 600},
+        'obstacle_y_position': {'min': 80, 'max': 150, 'default': 140},
+        'obstacle_width': {'min': 15, 'max': 75, 'default': 0}
+    }
 
     def __init__(self,
                  headless: bool = False,
                  frame_stack: int = 4,
                  processed_size: Tuple[int, int] = (84, 84),
                  max_episode_steps: int = 10000,
-                 reward_scale: float = 1.0):
+                 reward_scale: float = 1.0,
+                 normalize_numerical: bool = True,
+                 use_visual: bool = False, 
+                 use_numerical: bool = True):
         super().__init__()
 
         # Core parameters
@@ -36,25 +45,64 @@ class DinoGameEnvironment(gym.Env):
         self.processed_size = processed_size
         self.max_episode_steps = max_episode_steps
         self.reward_scale = reward_scale
+        self.normalize_numerical = normalize_numerical
+        self.use_visual = use_visual
+        self.use_numerical = use_numerical
+
+        # Validate configuration
+        if not self.use_visual and not self.use_numerical:
+            raise ValueError("At least one of use_visual or use_numerical must be True")
 
         self.logger = logging.getLogger(__name__)
 
-        # Initialize the frame processor utility
-        self.frame_processor = FrameProcessor(target_size=self.processed_size, stack_frames=self.frame_stack)
+        # Initialize the frame processor utility ONLY if using visual
+        if self.use_visual:
+            self.frame_processor = FrameProcessor(target_size=self.processed_size, stack_frames=self.frame_stack)
+        else:
+            self.frame_processor = None
 
         # Gym-specific definitions
-        self.action_space = spaces.Discrete(3)  # 0: Do Nothing, 1: Long Jump, 2: Short Jump, NOT used for now: 3: Duck
+        self.action_space = spaces.Discrete(4)  # 0: Do Nothing, 1: Long Jump, 2: Short Jump, 3: Duck
 
         processed_height, processed_width = self.processed_size
 
-        self.observation_space = gym.spaces.Dict({
-            'frame': gym.spaces.Box(
-                low=0, high=255, shape=(self.frame_stack, processed_height, processed_width), dtype=np.float32
-            ),
-            'distance_to_obstacle': gym.spaces.Box(low=0, high=1000, shape=(1,), dtype=np.float32),
-            'obstacle_y_position': gym.spaces.Box(low=0, high=500, shape=(1,), dtype=np.float32),
-            'obstacle_width': gym.spaces.Box(low=0, high=500, shape=(1,), dtype=np.float32)
-        })
+        # Build observation space based on what's enabled
+        observation_spaces = {}
+        
+        if self.use_visual:
+            observation_spaces['frame'] = gym.spaces.Box(
+                low=0, high=1, shape=(self.frame_stack, processed_height, processed_width), dtype=np.float32
+            )
+        
+        if self.use_numerical:
+            if self.normalize_numerical:
+                # Normalized to [0, 1] range
+                observation_spaces.update({
+                    'distance_to_obstacle': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
+                    'obstacle_y_position': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
+                    'obstacle_width': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+                })
+            else:
+                # Raw game values
+                observation_spaces.update({
+                    'distance_to_obstacle': gym.spaces.Box(
+                        low=self.GAME_CONSTANTS['distance_to_obstacle']['min'], 
+                        high=self.GAME_CONSTANTS['distance_to_obstacle']['max'], 
+                        shape=(1,), dtype=np.float32
+                    ),
+                    'obstacle_y_position': gym.spaces.Box(
+                        low=self.GAME_CONSTANTS['obstacle_y_position']['min'], 
+                        high=self.GAME_CONSTANTS['obstacle_y_position']['max'], 
+                        shape=(1,), dtype=np.float32
+                    ),
+                    'obstacle_width': gym.spaces.Box(
+                        low=self.GAME_CONSTANTS['obstacle_width']['min'], 
+                        high=self.GAME_CONSTANTS['obstacle_width']['max'], 
+                        shape=(1,), dtype=np.float32
+                    )
+                })
+
+        self.observation_space = gym.spaces.Dict(observation_spaces)
 
         # State and performance tracking
         self.current_step = 0
@@ -79,6 +127,58 @@ class DinoGameEnvironment(gym.Env):
         self.game_thread.start()
         self._wait_for_ready()
 
+    def _normalize_numerical_feature(self, value: float, feature_name: str) -> float:
+        """Normalize numerical features to [0, 1] range."""
+        if not self.normalize_numerical:
+            return value
+            
+        constants = self.GAME_CONSTANTS[feature_name]
+        min_val = constants['min']
+        max_val = constants['max']
+        
+        # Clamp value to valid range
+        value = np.clip(value, min_val, max_val)
+        
+        # Normalize to [0, 1]
+        if max_val > min_val:
+            normalized = (value - min_val) / (max_val - min_val)
+        else:
+            normalized = 0.0
+            
+        return float(normalized)
+    
+    def _get_default_observation(self) -> Dict[str, np.ndarray]:
+        """Get default observation when game state is unavailable."""
+        observation = {}
+        
+        if self.use_visual:
+            observation['frame'] = np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32)
+        
+        if self.use_numerical:
+            if self.normalize_numerical:
+                # For normalized features, use reasonable defaults
+                distance_default = self._normalize_numerical_feature(
+                    self.GAME_CONSTANTS['distance_to_obstacle']['default'], 'distance_to_obstacle'
+                )
+                y_default = self._normalize_numerical_feature(
+                    self.GAME_CONSTANTS['obstacle_y_position']['default'], 'obstacle_y_position'
+                )
+                width_default = self._normalize_numerical_feature(
+                    self.GAME_CONSTANTS['obstacle_width']['default'], 'obstacle_width'
+                )
+            else:
+                # Raw values
+                distance_default = float(self.GAME_CONSTANTS['distance_to_obstacle']['default'])
+                y_default = float(self.GAME_CONSTANTS['obstacle_y_position']['default'])
+                width_default = float(self.GAME_CONSTANTS['obstacle_width']['default'])
+            
+            observation.update({
+                'distance_to_obstacle': np.array([distance_default], dtype=np.float32),
+                'obstacle_y_position': np.array([y_default], dtype=np.float32),
+                'obstacle_width': np.array([width_default], dtype=np.float32)
+            })
+        
+        return observation
 
     async def _init_browser(self):
         """Initializes Playwright, launches the browser, and navigates to the game."""
@@ -94,7 +194,7 @@ class DinoGameEnvironment(gym.Env):
             # This is expected as we are offline. It loads the dino game.
             self.logger.info("Successfully loaded dino game page.")
 
-        await self.page.set_viewport_size({"width": 800, "height": 600})
+        await self.page.set_viewport_size({"width": 800, "height": 600})   
 
         # NOTE: The code below works correctly, but causes the window to flash.
         """
@@ -161,56 +261,64 @@ class DinoGameEnvironment(gym.Env):
         finally:
             await self._cleanup_async()
 
-    async def _capture_and_process_frame(self) -> np.ndarray:
-        """Captures a raw frame and processes it using the FrameProcessor.
+    async def _capture_and_process_frame(self) -> Dict[str, np.ndarray]:
+        """Captures and processes frame - optimized based on what's needed."""
+        observation = {}
         
-        Returns:
-            np.ndarray: Processed frame stack with shape (frame_stack, height, width)
-                    or zeros with same shape if an error occurs
-        """
         try:
-            # 1. Get canvas bounding box
-            canvas_handle = await self.page.query_selector('.runner-canvas')
-            box = await canvas_handle.bounding_box() if canvas_handle else None
+            # Get numerical features (always needed if use_numerical=True)
+            if self.use_numerical:
+                distance = await self._get_distance_to_obstacle()
+                y_position = await self._get_obstacle_y_position()
+                width = await self._get_obstacle_width()
 
-            # 2. Take screenshot
-            screenshot_bytes = await self.page.screenshot(type='png')
+                observation.update({
+                    'distance_to_obstacle': np.array([
+                        self._normalize_numerical_feature(distance, 'distance_to_obstacle')
+                    ], dtype=np.float32),
+                    'obstacle_y_position': np.array([
+                        self._normalize_numerical_feature(y_position, 'obstacle_y_position')
+                    ], dtype=np.float32),
+                    'obstacle_width': np.array([
+                        self._normalize_numerical_feature(width, 'obstacle_width')
+                    ], dtype=np.float32)
+                })
 
-            # 3. Decode PNG bytes → ndarray using OpenCV, then convert BGR → RGB
-            img_arr = np.frombuffer(screenshot_bytes, dtype=np.uint8)
-            raw_frame = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-            if raw_frame is None:
-                raise ValueError("Failed to decode screenshot bytes with OpenCV.")
-            raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
+            # ONLY process visual if needed
+            if self.use_visual:
+                # 1. Get canvas bounding box
+                canvas_handle = await self.page.query_selector('.runner-canvas')
+                box = await canvas_handle.bounding_box() if canvas_handle else None
 
-            # 4. Crop the frame using the bounding box
-            if box:
-                x, y, w, h = int(box['x']), int(box['y']), int(box['width']), int(box['height'])
-                raw_frame = raw_frame[y:y+h, x:x+w, :] # Crop using numpy slicing
-            else:
-                self.logger.warning("Game canvas not found, using uncropped frame.")
+                # 2. Take screenshot
+                screenshot_bytes = await self.page.screenshot(type='png')
 
-            # 5. Process the frame (handles grayscale, resize, normalize, stacking)
-            observation = {
-                'frame': self.frame_processor.process_frame(raw_frame),
-                'distance_to_obstacle': np.array([await self._get_distance_to_obstacle()], dtype=np.float32),
-                'obstacle_y_position': np.array([await self._get_obstacle_y_position()], dtype=np.float32),
-                'obstacle_width': np.array([await self._get_obstacle_width()], dtype=np.float32)
-            }
+                # 3. Decode PNG bytes → ndarray using OpenCV, then convert BGR → RGB
+                img_arr = np.frombuffer(screenshot_bytes, dtype=np.uint8)
+                raw_frame = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                if raw_frame is None:
+                    raise ValueError("Failed to decode screenshot bytes with OpenCV.")
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
+
+                # 4. Crop the frame using the bounding box
+                if box:
+                    x, y, w, h = int(box['x']), int(box['y']), int(box['width']), int(box['height'])
+                    raw_frame = raw_frame[y:y+h, x:x+w, :]
+                else:
+                    self.logger.warning("Game canvas not found, using uncropped frame.")
+
+                # 5. Process the frame
+                observation['frame'] = self.frame_processor.process_frame(raw_frame)
+
             return observation
             
         except Exception as e:
             self.logger.error(f"Error in _capture_and_process_frame: {str(e)}", 
                             exc_info=self.logger.level <= logging.DEBUG)
-            # Return a blank frame stack with correct shape
-            return {
-                'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
-                'distance_to_obstacle': np.array([1000], dtype=np.float32),
-                'obstacle_y_position': np.array([140], dtype=np.float32),
-                'obstacle_width': np.array([0], dtype=np.float32)
-            }
+            # Return default observation
+            return self._get_default_observation()
 
-
+    # [Keep all the existing game state methods unchanged]
     async def _is_game_over(self) -> bool:
         """Checks if the 'Game Over' screen is visible."""
         return await self.page.evaluate('() => window.Runner.instance_.crashed')
@@ -255,8 +363,8 @@ class DinoGameEnvironment(gym.Env):
         }
         """)
         
-    async def _get_distance_to_obstacle(self) -> int:
-        """Returns the distance to the next obstacle (X position minus dino width)."""
+    async def _get_distance_to_obstacle(self) -> float:
+        """Returns the distance to the next obstacle."""
         try:
             result = await self.page.evaluate("""
             () => {
@@ -264,23 +372,22 @@ class DinoGameEnvironment(gym.Env):
                 const obstacles = runner.horizon.obstacles;
                 
                 if (!obstacles || obstacles.length === 0) {
-                    return { distance: 1000, hasObstacle: false };
+                    return 600;
                 }
                 
                 const firstObstacle = obstacles[0];
-                const dinoWidth = runner.tRex.config.widthDuck || 59;
-                const distance = Math.max(0, firstObstacle.xPos - dinoWidth);
+                const dinoX = runner.tRex.xPos;
+                const distance = Math.max(0, firstObstacle.xPos - dinoX);
                 
-                return { distance: distance, hasObstacle: true };
+                return Math.min(distance, 600);
             }
         """)
-        
-            return result['distance']
+            return float(result)
         except Exception as e:
             self.logger.error(f"Error getting obstacle distance: {e}")
-            return 1000
+            return float(self.GAME_CONSTANTS['distance_to_obstacle']['default'])
     
-    async def _get_obstacle_y_position(self) -> int:
+    async def _get_obstacle_y_position(self) -> float:
         """Returns the Y position of the next obstacle."""
         try:
             result = await self.page.evaluate("""
@@ -300,13 +407,12 @@ class DinoGameEnvironment(gym.Env):
                 return Math.max(0, pixels - (height + yPos));
             }
         """)
-        
-            return result
+            return float(result)
         except Exception as e:
             self.logger.error(f"Error getting obstacle Y position: {e}")
-            return 140
+            return float(self.GAME_CONSTANTS['obstacle_y_position']['default'])
     
-    async def _get_obstacle_width(self) -> int:
+    async def _get_obstacle_width(self) -> float:
         """Returns the width of the next obstacle."""
         try:
             result = await self.page.evaluate("""
@@ -321,11 +427,10 @@ class DinoGameEnvironment(gym.Env):
                 return obstacles[0].width || 0;
             }
         """)
-        
-            return result
+            return float(result)
         except Exception as e:
             self.logger.error(f"Error getting obstacle width: {e}")
-            return 0
+            return float(self.GAME_CONSTANTS['obstacle_width']['default'])
 
     async def _get_obstacle_len(self) -> int:
         """Returns the number of obstacles in the horizon."""
@@ -372,9 +477,9 @@ class DinoGameEnvironment(gym.Env):
                 'is_obstacle_cleared': False, 
                 'obstacle_len': 0, 
                 'first_obstacle_x': -1,
-                'obstacle_distance': 1000,
-                'obstacle_y': 140,
-                'obstacle_width': 0
+                'obstacle_distance': self.GAME_CONSTANTS['distance_to_obstacle']['default'],
+                'obstacle_y': self.GAME_CONSTANTS['obstacle_y_position']['default'],
+                'obstacle_width': self.GAME_CONSTANTS['obstacle_width']['default']
             }
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
@@ -423,7 +528,7 @@ class DinoGameEnvironment(gym.Env):
 
         return reward
 
-    async def _async_reset(self) -> np.ndarray:
+    async def _async_reset(self) -> Dict[str, np.ndarray]:
         """Resets the game state asynchronously, with robust recovery logic."""
         try:
             if self.page is None or self.page.is_closed():
@@ -464,14 +569,8 @@ class DinoGameEnvironment(gym.Env):
                             await self.page.keyboard.press('Space')
                             await asyncio.sleep(0.3)
                         else:
-                            self.logger.error("All restart attempts failed. Returning zero state.")
-                            initial_observation = {
-                                'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
-                                'distance_to_obstacle': np.array([1000], dtype=np.float32),
-                                'obstacle_y_position': np.array([140], dtype=np.float32),
-                                'obstacle_width': np.array([0], dtype=np.float32)
-                            }
-                            return initial_observation
+                            self.logger.error("All restart attempts failed. Returning default observation.")
+                            return self._get_default_observation()
                     else:
                         await asyncio.sleep(0.5)  # Wait before next attempt
 
@@ -482,20 +581,20 @@ class DinoGameEnvironment(gym.Env):
             final_crashed = await self._is_game_over()
             if final_crashed:
                 self.logger.error("Game is still crashed after all restart attempts")
-                return np.zeros(self.observation_space.shape, dtype=np.float32)
+                return self._get_default_observation()
 
         except Exception as e:
             self.logger.error(f"Unexpected error during reset: {e}")
-            return np.zeros(self.observation_space.shape, dtype=np.float32)
+            return self._get_default_observation()
 
-        # Reset the frame processor's internal buffer only
-        self.frame_processor.reset()
+        # Reset the frame processor's internal buffer (only if using visual)
+        if self.use_visual and self.frame_processor:
+            self.frame_processor.reset()
         
-        # Get the initial stacked observation
+        # Get the initial observation
         return await self._capture_and_process_frame()
 
-
-    async def _async_step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    async def _async_step(self, action: int) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """Executes game action in the browser and returns results."""
         try:
             # 1. Perform action in browser
@@ -503,10 +602,10 @@ class DinoGameEnvironment(gym.Env):
                 await self.page.keyboard.press('ArrowUp', delay=200)
             elif action == 2:  # Short Jump
                 await self.page.keyboard.press('ArrowUp', delay=50)
-            '''
             elif action == 3:  # Duck
-                await self.page.keyboard.press('ArrowDown', delay=500)
-            '''
+                await self.page.keyboard.press('ArrowDown', delay=400)
+            # action == 0: Do Nothing
+            
             # 2. Get the definitive state of the game after the action
             game_state = await self._get_game_state()
             terminated = game_state.get('crashed', False)
@@ -514,16 +613,8 @@ class DinoGameEnvironment(gym.Env):
             # 3. Calculate reward based on the final state
             reward = self._calculate_reward(game_state)
 
-            # 4. Capture the visual observation
+            # 4. Capture the observation (optimized based on what's needed)
             observation = await self._capture_and_process_frame()
-            if observation['frame'] is None:
-                observation = {
-                    'frame': np.zeros((self.frame_stack, *self.processed_size), dtype=np.float32),
-                    'distance_to_obstacle': np.array([1000], dtype=np.float32),
-                    'obstacle_y_position': np.array([140], dtype=np.float32),
-                    'obstacle_width': np.array([0], dtype=np.float32)
-                }
-                self.logger.warning("Failed to capture frame, returning blank observation.")
 
             # 5. Update internal state and prepare return values
             self.episode_reward += reward
@@ -539,11 +630,10 @@ class DinoGameEnvironment(gym.Env):
 
         except PlaywrightError as e:
             self.logger.error(f"A Playwright error occurred during step: {e}")
-            return (np.zeros(self.observation_space.shape, dtype=np.float32),
-                    -10.0, True, False, {'score': self.last_score, 'speed': 0, 'error': str(e)})
+            default_obs = self._get_default_observation()
+            return (default_obs, -10.0, True, False, {'score': self.last_score, 'speed': 0, 'error': str(e)})
 
-
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         """Resets the environment for a new episode."""
         super().reset(seed=seed)
         
@@ -596,9 +686,8 @@ class DinoGameEnvironment(gym.Env):
             # If we get here, recovery failed or wasn't attempted
             raise TimeoutError("The game thread did not respond to the reset command.")
 
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    def step(self, action: int) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """Executes one step in the environment."""
-
         # Send action to the game thread
         self.action_queue.put(action)
         try:
@@ -630,7 +719,7 @@ class DinoGameEnvironment(gym.Env):
             
             # If we get here, recovery failed or wasn't attempted
             raise TimeoutError("The game thread did not respond to the step command.")
-            
+
     def close(self):
         """Cleans up all resources, ensuring the browser is closed."""
         if self.game_thread.is_alive():
@@ -705,10 +794,11 @@ class DinoGameEnvironment(gym.Env):
         self._wait_for_ready() 
         self.logger.info("Game thread successfully restarted")
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test the DinoGameEnvironment.")
     parser.add_argument('--visualize', action='store_true', help='Enable visualization of processed frames.')
+    parser.add_argument('--no-normalize', action='store_true', help='Disable numerical feature normalization.')
+    parser.add_argument('--use-visual', action='store_true', help='Enable visual processing.')
     args = parser.parse_args()
 
     print("Testing DinoGameEnvironment...")
@@ -723,21 +813,35 @@ if __name__ == '__main__':
     # -------------------------
 
     try:
-        env = DinoGameEnvironment(headless=False)
+        env = DinoGameEnvironment(
+            headless=False, 
+            normalize_numerical=not args.no_normalize,
+            use_visual=args.visualize,  
+            use_numerical=True
+        )
         obs, info = env.reset()
         
         # Handle dictionary observation
         if isinstance(obs, dict):
-            print(f"Frame shape: {obs['frame'].shape}")
-            print(f"Distance: {obs['distance_to_obstacle'][0]:.1f}")
-            print(f"Y position: {obs['obstacle_y_position'][0]:.1f}")
-            print(f"Width: {obs['obstacle_width'][0]:.1f}")
-            frame_data = obs['frame']
+            print(f"Observation keys: {list(obs.keys())}")
+            if 'frame' in obs:
+                print(f"Frame shape: {obs['frame'].shape}")
+                frame_data = obs['frame']
+            else:
+                frame_data = None
+                
+            if 'distance_to_obstacle' in obs:
+                print(f"Distance: {obs['distance_to_obstacle'][0]:.3f}")
+                print(f"Y position: {obs['obstacle_y_position'][0]:.3f}")
+                print(f"Width: {obs['obstacle_width'][0]:.3f}")
         else:
             print(f"Observation shape: {obs.shape}")
             frame_data = obs
             
         print(f"Action space: {env.action_space}")
+        print(f"Visual processing: {env.use_visual}")
+        print(f"Numerical processing: {env.use_numerical}")
+        print(f"Normalization enabled: {env.normalize_numerical}")
 
         if args.visualize and frame_data is not None:
             for i in range(4):
@@ -757,13 +861,18 @@ if __name__ == '__main__':
             
             # Extract obstacle info for logging
             if isinstance(obs, dict):
-                distance = obs['distance_to_obstacle'][0]
-                y_pos = obs['obstacle_y_position'][0]
-                width = obs['obstacle_width'][0]
-                print(f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, "
-                      f"Score={info['score']}, Distance={distance:.1f}, Y={y_pos:.1f}, "
-                      f"Width={width:.1f}, Done={done}")
-                frame_data = obs['frame']
+                log_str = f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, Score={info['score']}"
+                
+                if 'distance_to_obstacle' in obs:
+                    distance = obs['distance_to_obstacle'][0]
+                    y_pos = obs['obstacle_y_position'][0]
+                    width = obs['obstacle_width'][0]
+                    log_str += f", Distance={distance:.3f}, Y={y_pos:.3f}, Width={width:.3f}"
+                
+                log_str += f", Done={done}"
+                print(log_str)
+                
+                frame_data = obs.get('frame', None)
             else:
                 print(f"Step {step_num+1:03d}: Action={action}, Reward={reward:.3f}, "
                       f"Score={info['score']}, Done={done}")
@@ -778,7 +887,7 @@ if __name__ == '__main__':
                 print(f"Episode finished after {step_num+1} steps! Resetting...")
                 obs, info = env.reset()
                 total_reward = 0
-                if args.visualize and isinstance(obs, dict):
+                if args.visualize and isinstance(obs, dict) and 'frame' in obs:
                     frame_data = obs['frame']
                     for i in range(4):
                         axes[i].imshow(frame_data[i], cmap='gray')
