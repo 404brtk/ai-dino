@@ -25,8 +25,9 @@ class DinoGameEnvironment(gym.Env):
     GAME_CONSTANTS = {
         'distance_to_obstacle': {'min': 0, 'max': 600, 'default': 600},
         'obstacle_y_position': {'min': 80, 'max': 150, 'default': 140},
-        'obstacle_width': {'min': 15, 'max': 80, 'default': 0},
-        'current_speed': {'min': 6, 'max': 150, 'default': 6}
+        'obstacle_width': {'min': 15, 'max': 80, 'default': 15},
+        'current_speed': {'min': 6, 'max': 150, 'default': 6},
+        'obstacle_height': {'min': 10, 'max': 60, 'default': 10}
     }
 
     def __init__(self,
@@ -81,7 +82,8 @@ class DinoGameEnvironment(gym.Env):
                     'distance_to_obstacle': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
                     'obstacle_y_position': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
                     'obstacle_width': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-                    'current_speed': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+                    'current_speed': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
+                    'obstacle_height': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
                 })
             else:
                 # Raw game values
@@ -104,6 +106,11 @@ class DinoGameEnvironment(gym.Env):
                     'current_speed': gym.spaces.Box(
                         low=self.GAME_CONSTANTS['current_speed']['min'], 
                         high=self.GAME_CONSTANTS['current_speed']['max'], 
+                        shape=(1,), dtype=np.float32
+                    ),
+                    'obstacle_height': gym.spaces.Box(
+                        low=self.GAME_CONSTANTS['obstacle_height']['min'], 
+                        high=self.GAME_CONSTANTS['obstacle_height']['max'], 
                         shape=(1,), dtype=np.float32
                     )
                 })
@@ -175,17 +182,22 @@ class DinoGameEnvironment(gym.Env):
                 speed_default = self._normalize_numerical_feature(
                     self.GAME_CONSTANTS['current_speed']['default'], 'current_speed'
                 )
+                height_default = self._normalize_numerical_feature(
+                    self.GAME_CONSTANTS['obstacle_height']['default'], 'obstacle_height'
+                )
             else:
                 # Raw values
                 distance_default = float(self.GAME_CONSTANTS['distance_to_obstacle']['default'])
                 y_default = float(self.GAME_CONSTANTS['obstacle_y_position']['default'])
                 width_default = float(self.GAME_CONSTANTS['obstacle_width']['default'])
-                speed_default = float(self.GAME_CONSTANTS['current_speed']['default'])            
+                speed_default = float(self.GAME_CONSTANTS['current_speed']['default'])
+                height_default = float(self.GAME_CONSTANTS['obstacle_height']['default'])            
             observation.update({
                 'distance_to_obstacle': np.array([distance_default], dtype=np.float32),
                 'obstacle_y_position': np.array([y_default], dtype=np.float32),
                 'obstacle_width': np.array([width_default], dtype=np.float32),
-                'current_speed': np.array([speed_default], dtype=np.float32)
+                'current_speed': np.array([speed_default], dtype=np.float32),
+                'obstacle_height': np.array([height_default], dtype=np.float32)
             })
         
         return observation
@@ -282,6 +294,7 @@ class DinoGameEnvironment(gym.Env):
                 y_position = await self._get_obstacle_y_position()
                 width = await self._get_obstacle_width()
                 speed = await self._get_current_speed()
+                height = await self._get_obstacle_height()
 
                 observation.update({
                     'distance_to_obstacle': np.array([
@@ -295,6 +308,9 @@ class DinoGameEnvironment(gym.Env):
                     ], dtype=np.float32),
                     'current_speed': np.array([
                         self._normalize_numerical_feature(speed, 'current_speed')
+                    ], dtype=np.float32),
+                    'obstacle_height': np.array([
+                        self._normalize_numerical_feature(height, 'obstacle_height')
                     ], dtype=np.float32)
                 })
 
@@ -459,11 +475,31 @@ class DinoGameEnvironment(gym.Env):
         return await self.page.evaluate('() => window.Runner.instance_.horizon.obstacles.length ? \
         window.Runner.instance_.horizon.obstacles[0].xPos : -1')
 
+    async def _get_obstacle_height(self) -> float:
+        """Returns the height of the next obstacle."""
+        try:
+            result = await self.page.evaluate("""
+            () => {
+                const runner = window.Runner.instance_;
+                const obstacles = runner.horizon.obstacles;
+                
+                if (!obstacles || obstacles.length === 0) {
+                    return 0;
+                }
+                
+                return obstacles[0].typeConfig.height || 0;
+            }
+        """)
+            return float(result)
+        except Exception as e:
+            self.logger.error(f"Error getting obstacle height: {e}")
+            return float(self.GAME_CONSTANTS['obstacle_height']['default'])
+
     async def _get_game_state(self) -> Dict[str, Any]:
         """Gets the current game state by calling helper methods."""
         try:
             # Use existing helper methods to fetch game state components
-            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width = await asyncio.gather(
+            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width, obstacle_height = await asyncio.gather(
                 self._is_game_over(),
                 self._get_current_score(),
                 self._get_current_speed(),
@@ -472,7 +508,8 @@ class DinoGameEnvironment(gym.Env):
                 self._get_first_obstacle_x(),
                 self._get_distance_to_obstacle(),
                 self._get_obstacle_y_position(),
-                self._get_obstacle_width()
+                self._get_obstacle_width(),
+                self._get_obstacle_height()
             )
             return {
                 'crashed': crashed, 
@@ -483,7 +520,8 @@ class DinoGameEnvironment(gym.Env):
                 'first_obstacle_x': first_obstacle_x,
                 'obstacle_distance': obstacle_distance,
                 'obstacle_y': obstacle_y,
-                'obstacle_width': obstacle_width
+                'obstacle_width': obstacle_width,
+                'obstacle_height': obstacle_height
             }
         except PlaywrightError as e:
             self.logger.error(f"Error getting game state: {e}")
@@ -498,6 +536,7 @@ class DinoGameEnvironment(gym.Env):
                 'obstacle_distance': self.GAME_CONSTANTS['distance_to_obstacle']['default'],
                 'obstacle_y': self.GAME_CONSTANTS['obstacle_y_position']['default'],
                 'obstacle_width': self.GAME_CONSTANTS['obstacle_width']['default'],
+                'obstacle_height': self.GAME_CONSTANTS['obstacle_height']['default']
             }
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
@@ -535,7 +574,7 @@ class DinoGameEnvironment(gym.Env):
 
         if score_diff > 0:
             # Higher reward for higher speeds (difficulty)
-            speed_factor = min(2.0, speed / 5.0)
+            speed_factor = min(1.0, speed / 10.0)
             reward += score_diff * 0.1 * speed_factor * self.reward_scale
 
         self.last_score = current_score
@@ -850,6 +889,7 @@ if __name__ == '__main__':
                 print(f"Y position: {obs['obstacle_y_position'][0]:.3f}")
                 print(f"Width: {obs['obstacle_width'][0]:.3f}")
                 print(f"Current speed: {obs['current_speed'][0]:.3f}")
+                print(f"Obstacle height: {obs['obstacle_height'][0]:.3f}")
         else:
             print(f"Observation shape: {obs.shape}")
             frame_data = obs
@@ -884,7 +924,8 @@ if __name__ == '__main__':
                     y_pos = obs['obstacle_y_position'][0]
                     width = obs['obstacle_width'][0]
                     speed = obs['current_speed'][0]
-                    log_str += f", Distance={distance:.3f}, Y={y_pos:.3f}, Width={width:.3f}, Speed={speed:.3f}"
+                    height = obs['obstacle_height'][0]
+                    log_str += f", Distance={distance:.3f}, Y={y_pos:.3f}, Width={width:.3f}, Speed={speed:.3f}, Height={height:.3f}"
                 
                 log_str += f", Done={done}"
                 print(log_str)
