@@ -11,7 +11,7 @@ from utils import PrioritizedReplayBuffer, EpsilonGreedy
 class DQN(nn.Module):
     """Deep Q-Network model for processing game frames."""
     
-    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 3, use_numerical: bool = True, use_visual: bool = False):
+    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 4, use_numerical: bool = True, use_visual: bool = False):
         """
         Initializes the DQN model with convolutional and fully connected layers.
 
