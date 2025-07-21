@@ -27,6 +27,8 @@ class TrainingConfig:
         self.start_eps = 1.0
         self.end_eps = 0.01
         self.decay_steps = 15000
+        self.use_visual = False
+        self.use_numerical = True
         
         # Training parameters
         self.total_episodes = 10000
