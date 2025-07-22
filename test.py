@@ -98,6 +98,10 @@ class DinoTester:
             Episode results dictionary
         """
         state, _ = self.env.reset()
+
+        # Start the game
+        self.env.step(1)
+
         episode_reward = 0.0
         episode_steps = 0
         episode_score = 0
