@@ -542,48 +542,65 @@ class DinoGameEnvironment(gym.Env):
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
         if game_state.get('crashed', False):
-            return -10.0  # Large penalty for crashing
-
-        # Base survival reward
-        reward = 0.1 * self.reward_scale
-
-        # Score-based reward
-        current_score = game_state.get('score', self.last_score)
-        score_diff = current_score - self.last_score
-        speed = game_state.get('speed', 0)
-        is_obstacle_cleared = game_state.get('is_obstacle_cleared', self.prev_obstacle_cleared)
-        obstacle_len = game_state.get('obstacle_len', self.last_obstacle_len)
-        first_obstacle_x = game_state.get('first_obstacle_x', self.last_first_obstacle_x)
-
-        # Reward for clearing an obstacle
-        obstacle_cleared_event = False       
-        # 1. An obstacle's right edge passed the T-Rex (rising edge detection)
-        if is_obstacle_cleared and not self.prev_obstacle_cleared:
-            obstacle_cleared_event = True
-        # 2. An obstacle scrolled off screen (count decreased)
-        elif obstacle_len < self.last_obstacle_len:
-            obstacle_cleared_event = True
-        # 3. An obstacle was replaced by a new one
-        if (obstacle_len > 0 and self.last_obstacle_len == obstacle_len and
-              first_obstacle_x > self.last_first_obstacle_x and self.last_first_obstacle_x != -1):
-            obstacle_cleared_event = True
+            return -1.0  # Crash penalty
         
+        reward = 0.0
+        current_score = game_state.get('score', self.last_score)
+        distance = game_state.get('obstacle_distance', 600)
+        speed = game_state.get('speed', 6)
+        
+        # 1. Survival reward (scaled by speed for difficulty)
+        speed_factor = min(2.0, speed / 10.0)  # Cap at 2x multiplier
+        survival_reward = 0.01 * speed_factor
+        reward += survival_reward
+        
+        # 2. Distance-based reward (encourage approaching obstacles)
+        if distance < 200:  # Close to obstacle
+            proximity_reward = (200 - distance) / 200 * 0.05
+            reward += proximity_reward
+        
+        # 3. Enhanced obstacle clearing detection
+        obstacle_cleared_event = self._detect_obstacle_cleared(game_state)
         if obstacle_cleared_event:
-            #self.logger.info("***************** Obstacle cleared! *****************")
-            reward += 2.0 * self.reward_scale  # Bonus for clearing an obstacle
-
+            # Scale reward by speed (harder = more reward)
+            clear_reward = 0.5 + (speed / 20.0)  # Base 0.5, up to 1.5 at high speed
+            reward += clear_reward
+            
+        # 4. Score progression reward
+        score_diff = current_score - self.last_score
         if score_diff > 0:
-            # Higher reward for higher speeds (difficulty)
-            speed_factor = min(1.0, speed / 10.0)
-            reward += score_diff * 0.1 * speed_factor * self.reward_scale
+            reward += score_diff * 0.01
+        
+        # 5. Penalty for staying too far from obstacles (encourage engagement)
+        if distance > 400:
+            reward -= 0.005
+            
+        return reward * self.reward_scale
 
-        self.last_score = current_score
-        self.prev_obstacle_cleared = is_obstacle_cleared
-        self.last_obstacle_len = obstacle_len
-        if first_obstacle_x != -1:
-            self.last_first_obstacle_x = first_obstacle_x
-
-        return reward
+    def _detect_obstacle_cleared(self, game_state: Dict[str, Any]) -> bool:
+        """Obstacle clearing detection."""
+        is_obstacle_cleared = game_state.get('is_obstacle_cleared', False)
+        obstacle_len = game_state.get('obstacle_len', 0)
+        first_obstacle_x = game_state.get('first_obstacle_x', -1)
+        
+        # Multiple detection methods
+        cleared = False
+        
+        # Method 1: Rising edge detection
+        if is_obstacle_cleared and not self.prev_obstacle_cleared:
+            cleared = True
+            
+        # Method 2: Obstacle count decreased
+        elif obstacle_len < self.last_obstacle_len:
+            cleared = True
+            
+        # Method 3: New obstacle appeared (old one scrolled off)
+        elif (obstacle_len > 0 and self.last_obstacle_len == obstacle_len and
+            first_obstacle_x > self.last_first_obstacle_x + 50 and  # Significant jump
+            self.last_first_obstacle_x != -1):
+            cleared = True
+        
+        return cleared
 
     async def _async_reset(self) -> Dict[str, np.ndarray]:
         """Resets the game state asynchronously, with robust recovery logic."""
@@ -658,7 +675,7 @@ class DinoGameEnvironment(gym.Env):
             if action == 1:  # Long Jump
                 await self.page.keyboard.press('ArrowUp', delay=100)
             elif action == 2:  # Duck
-                await self.page.keyboard.press('ArrowDown', delay=400)
+                 await self.page.keyboard.press('ArrowDown', delay=150)
             # action == 0: Do Nothing
             
             # 2. Get the definitive state of the game after the action
