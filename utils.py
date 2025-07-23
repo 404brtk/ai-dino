@@ -13,27 +13,27 @@ class TrainingConfig:
         # Environment parameters
         self.frame_stack = 4
         self.processed_size = (84, 84)
-        self.max_episode_steps = 10000
+        self.max_episode_steps = 50000
         self.reward_scale = 1.0
         self.normalize_numerical = True
 
         # Agent parameters
         self.lr = 0.0001
-        self.gamma = 0.99
-        self.buffer_size = 100000
-        self.batch_size = 32
-        self.target_update_freq = 1000
+        self.gamma = 0.995
+        self.buffer_size = 200000
+        self.batch_size = 128
+        self.target_update_freq = 2000
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.start_eps = 1.0
-        self.end_eps = 0.01
-        self.decay_steps = 15000
+        self.start_eps = 0.9
+        self.end_eps = 0.02
+        self.decay_steps = 100000
         self.use_visual = False
         self.use_numerical = True
         
         # Training parameters
         self.total_episodes = 10000
-        self.warmup_episodes = 40
-        self.train_freq = 4
+        self.warmup_episodes = 50
+        self.train_freq = 1
         self.eval_freq = 50
         self.save_freq = 100
         self.log_freq = 1
@@ -109,10 +109,10 @@ class PrioritizedReplayBuffer:
     """Advanced experience buffer with prioritized sampling."""
     
     def __init__(self, 
-                 capacity: int = 100000,
+                 capacity: int = 200000,
                  alpha: float = 0.6,
                  beta: float = 0.4,
-                 beta_increment: float = 0.001):
+                 beta_increment: float = 0.0001):
         """
         Initialize prioritized experience buffer.
         
@@ -183,29 +183,47 @@ class PrioritizedReplayBuffer:
 
 class EpsilonGreedy:
     """Epsilon-greedy exploration strategy with decay."""
-    
-    def __init__(self, start_eps: float = 1.0, end_eps: float = 0.01, 
-                 decay_steps: int = 10000):
+    def __init__(self, start_eps: float = 1.0, end_eps: float = 0.01,
+                 decay_steps: int = 50000, decay_type: str = 'linear'):
         """
         Initialize epsilon-greedy strategy.
         
         Args:
             start_eps: Initial epsilon value
-            end_eps: Final epsilon value
+            end_eps: Final epsilon value  
             decay_steps: Number of steps to decay from start to end
+            decay_type: 'linear', 'exponential', or 'cosine'
         """
         self.start_eps = start_eps
         self.end_eps = end_eps
         self.decay_steps = decay_steps
+        self.decay_type = decay_type
         self.step = 0
 
     def peek(self) -> float:
         """Get current epsilon value without incrementing step."""
         if self.step >= self.decay_steps:
             return self.end_eps
+            
+        progress = self.step / self.decay_steps
         
-        return self.end_eps + (self.start_eps - self.end_eps) * \
-                  math.exp(-1. * self.step / self.decay_steps)
+        if self.decay_type == 'linear':
+            # Linear decay (recommended for DQN)
+            epsilon = self.start_eps - (self.start_eps - self.end_eps) * progress
+            
+        elif self.decay_type == 'exponential':
+            # Less aggressive exponential decay
+            decay_rate = -math.log(self.end_eps / self.start_eps) / self.decay_steps
+            epsilon = self.start_eps * math.exp(-decay_rate * self.step)
+            
+        elif self.decay_type == 'cosine':
+            # Cosine decay (smooth transition)
+            epsilon = self.end_eps + (self.start_eps - self.end_eps) * \
+                     0.5 * (1 + math.cos(math.pi * progress))
+        else:
+            raise ValueError(f"Unknown decay_type: {self.decay_type}")
+            
+        return max(epsilon, self.end_eps)
 
     def get_epsilon(self) -> float:
         """Get current epsilon value and increment step."""
