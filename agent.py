@@ -29,7 +29,6 @@ class DQN(nn.Module):
         total_input_size = 0
         
         # Convolutional layers for feature extraction from frames
-        # Probably will not be used as the agent doesn't train well with it
         if self.use_visual:
             self.conv = nn.Sequential(
                 nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4),
@@ -47,12 +46,13 @@ class DQN(nn.Module):
         if self.use_numerical:
             # Numerical feature processor
             self.numerical_fc = nn.Sequential(
-                nn.Linear(numerical_input_size, 32),
+                nn.Linear(numerical_input_size, 128),
                 nn.ReLU(),
-                nn.Linear(32, 64),
+                nn.Dropout(0.2),
+                nn.Linear(128, 64),
                 nn.ReLU(),
                 nn.Linear(64, 32),
-                nn.ReLU()   
+                nn.ReLU()
             )
             total_input_size += 32
         
@@ -60,15 +60,16 @@ class DQN(nn.Module):
         if total_input_size == 0:
             raise ValueError("At least one of use_visual or use_numerical must be True")
         
-        # Fully connected layers for Q-value estimation
-        self.fc = nn.Sequential(
-            nn.Linear(total_input_size, 512),
+        # Value and advantage streams (Dueling DQN)
+        self.value_stream = nn.Sequential(
+            nn.Linear(total_input_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
+            nn.Linear(128, 1)
+        )
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(total_input_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, n_actions)
+            nn.Linear(128, n_actions)
         )
 
     def forward(self, visual_input: torch.Tensor = None, numerical_input: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -93,7 +94,14 @@ class DQN(nn.Module):
         # Combine features
         combined_features = torch.cat(features, dim=1) if len(features) > 1 else features[0]
         
-        return self.fc(combined_features)
+        # Dueling DQN computation
+        values = self.value_stream(combined_features)
+        advantages = self.advantage_stream(combined_features)
+        
+        # Combine value and advantage
+        q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
+
+        return q_values
 
 class DQNAgent:
     """Complete DQN Agent with Double DQN and target network."""
@@ -144,7 +152,7 @@ class DQNAgent:
         
         # Replay buffer and exploration
         self.replay_buffer = PrioritizedReplayBuffer(buffer_size)
-        self.epsilon_greedy = EpsilonGreedy(self.start_eps, self.end_eps, self.decay_steps)
+        self.epsilon_greedy = EpsilonGreedy(self.start_eps, self.end_eps, self.decay_steps, decay_type='linear')
         
         # Loss function (using Huber loss for more stability)
         self.criterion = nn.SmoothL1Loss()
@@ -276,10 +284,18 @@ class DQNAgent:
         # Compute loss
         loss = (weights * self.criterion(current_q_values.squeeze(1), target_q_values)).mean()
 
-        # Optimize
+        # Store values before backprop for monitoring
+        q_values_mean = current_q_values.mean().item()
+        target_q_mean = target_q_values.mean().item()
+        td_error_mean = np.mean(td_errors)
+    
+        # Optimize with gradient monitoring
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
+
+        # Gradient clipping and monitoring
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Update target network
@@ -287,7 +303,15 @@ class DQNAgent:
         if self.update_count % self.target_update_freq == 0:
             self.update_target_network()
 
-        return loss.item()
+        # Return training info
+        return {
+            'loss': loss.item(),
+            'grad_norm': grad_norm.item(),
+            'q_values_mean': q_values_mean,
+            'target_q_mean': target_q_mean,
+            'td_error_mean': td_error_mean,
+            'current_lr': self.optimizer.param_groups[0]['lr']
+        }
 
     def save_model(self, filepath: str):
         """Save model state."""
