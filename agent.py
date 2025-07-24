@@ -11,7 +11,7 @@ from utils import PrioritizedReplayBuffer, EpsilonGreedy
 class DQN(nn.Module):
     """Deep Q-Network model for processing game frames."""
     
-    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 5, use_numerical: bool = True, use_visual: bool = False):
+    def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 6, use_numerical: bool = True, use_visual: bool = False):
         """
         Initializes the DQN model with convolutional and fully connected layers.
 
@@ -172,7 +172,8 @@ class DQNAgent:
                     state['obstacle_y_position'][0],
                     state['obstacle_width'][0],
                     state['current_speed'][0],
-                    state['obstacle_height'][0]
+                    state['obstacle_height'][0],
+                    state['dino_y_position'][0]
                 ], dtype=np.float32)
             else:
                 numerical_data = None
@@ -246,8 +247,8 @@ class DQNAgent:
                 visual_next_states.append(vis_next_state if vis_next_state is not None else np.zeros((4, 84, 84)))
             
             if self.use_numerical:
-                numerical_states.append(num_state if num_state is not None else np.zeros(5))
-                numerical_next_states.append(num_next_state if num_next_state is not None else np.zeros(5))
+                numerical_states.append(num_state if num_state is not None else np.zeros(6))
+                numerical_next_states.append(num_next_state if num_next_state is not None else np.zeros(6))
 
         # Convert to tensors
         visual_states_tensor = None
