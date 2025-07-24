@@ -68,7 +68,7 @@ class DinoTrainer:
         self.best_single_score = 0
         self.consecutive_failures = 0
         self.max_consecutive_failures = 5
-        
+
         self.logger.info("Trainer initialized successfully!")
     
     def _initialize_environment(self, max_retries: int = 3):
@@ -254,7 +254,7 @@ class DinoTrainer:
             
             # Cleanup old checkpoints (but not for final save)
             if not is_final:
-                self._cleanup_old_checkpoints(keep_last=3)
+                self._cleanup_old_checkpoints(keep_last=5)
             
             self.logger.info(f"Checkpoint saved: episode {self.episode}")
             
@@ -375,12 +375,11 @@ class DinoTrainer:
             self.logger.warning(f"Error during checkpoint cleanup: {e}")
     
     def log_progress(self, episode_result: Dict[str, Any]):
-        """Log training progress with error handling."""
+        """Log training progress."""
         try:
             avg_reward = self.metrics.get_recent_avg_reward()
             avg_score = self.metrics.get_recent_avg_score()
             best_score = self.metrics.get_best_score()
-            
             # Console logging
             self.logger.info(
                 f"Episode {self.episode:4d} | "
@@ -391,7 +390,6 @@ class DinoTrainer:
                 f"Avg Score: {avg_score:.1f} | "
                 f"Best: {best_score}"
             )
-            
             # TensorBoard logging
             if self.tb_logger and self.tb_logger.writer:
                 self.tb_logger.log_scalar('Episode/Reward', episode_result['reward'], self.episode)
@@ -408,7 +406,7 @@ class DinoTrainer:
             self.logger.warning(f"Error logging progress: {e}")
     
     def train(self):
-        """Main training loop with comprehensive error handling."""
+        """Main training loop."""
         self.logger.info("Starting training...")
         self.logger.info(f"Training for {self.config.total_episodes} episodes")
         self.logger.info(f"Device: {self.config.device}")
@@ -494,6 +492,17 @@ class DinoTrainer:
                 if self.env:
                     self.env.close()
 
+    def reset_epsilon(self, new_start_eps: float = 0.35, new_decay_steps: int = 50000):
+        """Reset epsilon for continued training with fresh exploration."""
+        self.logger.info(f"Resetting epsilon from {self.agent.epsilon_greedy.peek():.3f} to {new_start_eps}")
+        
+        # Reset epsilon greedy parameters
+        self.agent.epsilon_greedy.start_eps = new_start_eps
+        self.agent.epsilon_greedy.step = 0  # Reset step counter
+        self.agent.epsilon_greedy.decay_steps = new_decay_steps
+        
+        self.logger.info(f"New epsilon schedule: {new_start_eps} → {self.agent.epsilon_greedy.end_eps} over {new_decay_steps} steps")
+
 def main():
     """Main function with argument parsing."""
     parser = argparse.ArgumentParser(description="Train DQN agent on Chrome Dino game")
@@ -517,6 +526,7 @@ def main():
     
     # Resume training
     parser.add_argument('--resume', type=str, help='Path to checkpoint to resume from')
+    parser.add_argument('--reset-epsilon', action='store_true', help='Reset epsilon for continued training')
     
     args = parser.parse_args()
     
@@ -572,9 +582,15 @@ def main():
     # Resume from checkpoint if specified
     if args.resume:
         trainer.logger.info(f"Resuming training from {args.resume}")
-        if not trainer.load_checkpoint(args.resume):
+        if trainer.load_checkpoint(args.resume):
+            if args.reset_epsilon:
+                # Reset epsilon for fresh exploration
+                trainer.reset_epsilon(new_start_eps=0.35, new_decay_steps=50000)
+            else:
+                trainer.logger.info("Continuing training with existing epsilon schedule")
+        else:
             trainer.logger.error("Failed to load checkpoint. Starting fresh training.")
-    
+        
     trainer.train()
 
 if __name__ == '__main__':
