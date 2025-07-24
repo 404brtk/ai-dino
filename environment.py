@@ -524,7 +524,7 @@ class DinoGameEnvironment(gym.Env):
         """Gets the current game state by calling helper methods."""
         try:
             # Use existing helper methods to fetch game state components
-            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width, obstacle_height = await asyncio.gather(
+            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width, obstacle_height, dino_y_position = await asyncio.gather(
                 self._is_game_over(),
                 self._get_current_score(),
                 self._get_current_speed(),
