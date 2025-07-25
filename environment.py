@@ -500,6 +500,26 @@ class DinoGameEnvironment(gym.Env):
         return await self.page.evaluate('() => window.Runner.instance_.horizon.obstacles.length ? \
         window.Runner.instance_.horizon.obstacles[0].xPos : -1')
 
+    async def _get_obstacle_type(self) -> str:
+        """Returns the type of the next obstacle."""
+        try:
+            result = await self.page.evaluate("""
+            () => {
+                const runner = window.Runner.instance_;
+                const obstacles = runner.horizon.obstacles;
+                
+                if (!obstacles || obstacles.length === 0) {
+                    return "none";
+                }
+                
+                return obstacles[0].typeConfig.type || "none";
+            }
+        """)
+            return str(result)
+        except Exception as e:
+            self.logger.error(f"Error getting obstacle type: {e}")
+            return "none"
+
     async def _get_obstacle_height(self) -> float:
         """Returns the height of the next obstacle."""
         try:
@@ -524,7 +544,7 @@ class DinoGameEnvironment(gym.Env):
         """Gets the current game state by calling helper methods."""
         try:
             # Use existing helper methods to fetch game state components
-            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width, obstacle_height, dino_y_position = await asyncio.gather(
+            crashed, score, speed, is_obstacle_cleared, obstacle_len, first_obstacle_x, obstacle_distance, obstacle_y, obstacle_width, obstacle_height, dino_y_position, obstacle_type = await asyncio.gather(
                 self._is_game_over(),
                 self._get_current_score(),
                 self._get_current_speed(),
@@ -535,7 +555,8 @@ class DinoGameEnvironment(gym.Env):
                 self._get_obstacle_y_position(),
                 self._get_obstacle_width(),
                 self._get_obstacle_height(),
-                self._get_dino_y_position()
+                self._get_dino_y_position(),
+                self._get_obstacle_type()
             )
             return {
                 'crashed': crashed, 
@@ -548,7 +569,8 @@ class DinoGameEnvironment(gym.Env):
                 'obstacle_y': obstacle_y,
                 'obstacle_width': obstacle_width,
                 'obstacle_height': obstacle_height,
-                'dino_y_position': dino_y_position
+                'dino_y_position': dino_y_position,
+                'obstacle_type': obstacle_type
             }
         except PlaywrightError as e:
             self.logger.error(f"Error getting game state: {e}")
@@ -564,11 +586,13 @@ class DinoGameEnvironment(gym.Env):
                 'obstacle_y': self.GAME_CONSTANTS['obstacle_y_position']['default'],
                 'obstacle_width': self.GAME_CONSTANTS['obstacle_width']['default'],
                 'obstacle_height': self.GAME_CONSTANTS['obstacle_height']['default'],
-                'dino_y_position': self.GAME_CONSTANTS['dino_y_position']['default']
+                'dino_y_position': self.GAME_CONSTANTS['dino_y_position']['default'],
+                'obstacle_type': 'none'
             }
     
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
+        
         if game_state.get('crashed', False):
             return -1.0  * self.reward_scale # Crash penalty
         
@@ -576,28 +600,46 @@ class DinoGameEnvironment(gym.Env):
         current_score = game_state.get('score', self.last_score)
         distance = game_state.get('obstacle_distance', 600)
         speed = game_state.get('speed', 6)
+        obstacle_type = game_state.get('obstacle_type', 'none')
         
         # 1. Score progression reward (scaled by speed for difficulty)
         score_diff = current_score - self.last_score
         if score_diff > 0:
             reward += score_diff * 0.01 * (speed / 10.0)
         
-        # 2. Distance-based reward (encourage approaching obstacles)
-        if distance <= 150:  # Close to obstacle
-            proximity_reward = (150 - distance) / 150 * 0.05
-            reward += proximity_reward
+        # 2. Survival bonus (increases with speed as game gets harder)
+        survival_bonus = 0.001 * (1 + speed / 10.0)
+        reward += survival_bonus
         
-        # 3. Enhanced obstacle clearing detection
+        # 3. Distance-based reward (more conservative approach)
+        if 65 <= distance <= 150:  # Optimal timing zone
+            proximity_reward = (150 - distance) / 150 * 0.02
+            reward += proximity_reward
+        # 4. Danger zone penalty (too close is risky)
+        elif distance < 65:
+            danger_penalty = (65 - distance) / 65 * 0.02
+            reward -= danger_penalty
+        
+        # 5. Enhanced obstacle clearing detection with type-specific rewards
         obstacle_cleared_event = self._detect_obstacle_cleared(game_state)
         if obstacle_cleared_event:
-            # Scale reward by speed (harder = more reward)
-            clear_reward = 0.5 + (speed / 20.0)
+            # Different rewards for different obstacle types
+            if obstacle_type == 'pterodactyl':
+                clear_reward = 0.3 + (speed / 30.0)  # Higher for pterodactyls
+            else:  # cactuses
+                clear_reward = 0.15 + (speed / 40.0)
             reward += clear_reward
             
-        # 4. Penalty for staying too far from obstacles (encourage engagement)
+        # 6. Penalty for staying too far (scales with speed - positioning becomes more critical)
         if distance > 400:
-            reward -= 0.005
+            far_penalty = 0.005 * (1 + speed / 15.0)
+            reward -= far_penalty
             
+        # 7. Speed adaptation bonus (reward learning to handle higher speeds)
+        if speed > 8:  # After initial acceleration
+            speed_adaptation = 0.001 * (speed - 8) / 8.0
+            reward += speed_adaptation
+        
         self.last_score = current_score
 
         return reward * self.reward_scale
