@@ -18,23 +18,23 @@ class TrainingConfig:
         self.normalize_numerical = True
 
         # Agent parameters
-        self.lr = 0.002
+        self.lr = 0.001
         self.gamma = 0.99
-        self.buffer_size = 50000
+        self.buffer_size = 20000
         self.batch_size = 32
-        self.target_update_freq = 1000
+        self.target_update_freq = 100
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.start_eps = 0.9
+        self.start_eps = 1.0
         self.end_eps = 0.01
-        self.decay_steps = 20000
+        self.decay_steps = 50000
         self.use_visual = False
         self.use_numerical = True
         
         # Training parameters
         self.total_episodes = 5000
         self.warmup_episodes = 50
-        self.train_freq = 1
-        self.eval_freq = 50
+        self.train_freq = 2
+        self.eval_freq = 100
         self.save_freq = 100
         self.log_freq = 1
         
