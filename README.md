@@ -1,144 +1,132 @@
 # AI-Dino: Reinforcement Learning for Chrome's Dinosaur Game
 
-A machine learning project that trains an AI agent to play the Chrome Dinosaur Game using reinforcement learning techniques and browser automation.
+A machine learning project that trains an AI agent to play the Chrome Dinosaur Game using reinforcement learning with a hybrid input system (visual and numerical) and browser automation.
 
 ## Project Overview
 
-AI-Dino uses a Deep Q-Network (DQN) approach to teach an AI agent how to play the offline dinosaur game that appears in Chrome when you're disconnected from the internet. The project leverages Playwright for browser automation and PyTorch for the neural network implementation.
+AI-Dino uses a Deep Q-Network (DQN) to master the Chrome dinosaur game. It uniquely combines **visual data** from game frames with **numerical data** extracted directly from the game's state (e.g., speed, distance to obstacles). This hybrid approach allows the agent to build a more comprehensive understanding of the environment, leading to more robust performance.
 
-## Features
+The project is built with PyTorch, Playwright for browser automation, and follows the OpenAI Gym (Gymnasium) interface for a standardized environment.
 
-- **Browser Automation**: Uses Playwright to control the Chrome browser and interact with the dinosaur game
-- **Deep Reinforcement Learning**: Implements DQN with several modern improvements:
-  - Double DQN for more stable learning
-  - Prioritized Experience Replay for efficient training
-  - Frame stacking for temporal awareness
-- **Robust Error Handling**: Includes recovery mechanisms for browser crashes and game resets
-- **Visualization Tools**: Training progress visualization using TensorBoard
-- **Configurable Training**: Easily adjustable training parameters
+## Key Features
 
-## Requirements
-
-The project requires Python 3.6+ and the following major packages:
-
-- PyTorch: Neural network implementation
-- Playwright: Browser automation
-- OpenCV: Image processing
-- Gym: Reinforcement learning environment structure
-- TensorBoard: Training visualization
-- NumPy: Numerical operations
-
-For the complete list of requirements, see `requirements.txt`.
+- **Hybrid Input System**: The agent can be trained using visual features, numerical features, or both, allowing for flexible experimentation.
+- **Deep Q-Network (DQN)**: Implemented a Deep Q-Network to learn the optimal policy for the game.
+  - Double DQN to mitigate Q-value overestimation.
+  - Prioritized Experience Replay for efficient learning from important transitions.
+- **Robust Browser Automation**: Built on Playwright, it features a threaded, asynchronous game loop with robust error handling and session recovery.
+- **Comprehensive Logging & Visualization**: Detailed console output, TensorBoard integration for real-time monitoring, and automatic saving of training metrics.
+- **Advanced Training Management**: Sophisticated checkpointing system that saves the best models based on multiple criteria and allows for seamless resumption of training.
 
 ## Project Structure
 
-- `environment.py`: Contains the `DinoGameEnvironment` class that handles browser interaction and implements the OpenAI Gym interface
-- `agent.py`: Implements the `DQNAgent` and neural network architecture
-- `utils.py`: Contains utility classes such as:
-  - `FrameProcessor`: Handles image preprocessing
-  - `PrioritizedReplayBuffer`: Manages experience replay with prioritization
-  - `EpsilonGreedy`: Handles exploration/exploitation balance
-  - `TrainingMetrics`: Tracks training progress
-- `train.py`: Manages the training loop and logging
-- `test.py`: Evaluates trained models without additional training
+- `train.py`: The main entry point for training the agent. Contains the `DinoTrainer` class.
+- `test.py`: The entry point for evaluating a trained agent. Contains the `DinoTester` class.
+- `agent.py`: Implements the `DQNAgent` and the `DQN` neural network architecture.
+- `environment.py`: The `DinoGameEnvironment` class, which handles all browser interaction and conforms to the OpenAI Gym interface.
+- `utils.py`: Contains utility classes:
+  - `TrainingConfig`: Centralized configuration for all training parameters.
+  - `TrainingMetrics`: Tracks and saves detailed training progress.
+  - `PrioritizedReplayBuffer`: Implements the prioritized experience replay mechanism.
+  - `EpsilonGreedy`: Manages the exploration-exploitation strategy.
+  - `FrameProcessor`: Handles preprocessing of visual game frames.
+  - `TensorBoardLogger`: A simple wrapper for TensorBoard logging.
+- `requirements.txt`: A list of all Python dependencies.
 
 ## How to Use
 
 ### Installation
 
-1. Clone the repository `git clone https://github.com/404brtk/ai-dino.git`
-2. Install dependencies: `pip install -r requirements.txt`
-3. Install Playwright browsers: `playwright install chromium`
+1.  **Clone the repository**:
+    ```bash
+    (HTTPS) git clone https://github.com/404brtk/ai-dino.git
+    (SSH) git clone git@github.com:404brtk/ai-dino.git
+    cd ai-dino
+    ```
+2.  **Install dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Install Playwright browsers**:
+    ```bash
+    playwright install chromium
+    ```
 
 ### Training the Agent
 
-To start training with default parameters:
+The training script is highly configurable. By default, it runs using only numerical inputs.
 
+**Default Training (Numerical Inputs Only):**
 ```bash
 python train.py
 ```
 
-With custom parameters, for example:
+**Training with Visual Inputs:**
+To enable visual processing, use the `--use-visual` flag. You can also disable numerical inputs if desired.
 ```bash
-python train.py --episodes 5000 --headless --device cuda
+# Use both visual and numerical inputs
+python train.py --episodes 5000 --use-visual
+
+# Use only visual inputs
+python train.py --episodes 5000 --use-visual --use-numerical false
 ```
 
-To resume training from a previous checkpoint:
+**Resuming Training:**
+Resume from the last saved checkpoint. You can also reset the exploration (epsilon) schedule to encourage new learning.
 ```bash
-python train.py --resume ./checkpoints/dqn_checkpoint_episode_1000.pth
+# Resume from a specific checkpoint
+python train.py --resume ./checkpoints/model_ep1000.pth
+
+# Resume and reset epsilon for renewed exploration
+python train.py --resume ./checkpoints/model_ep1000.pth --reset-epsilon
 ```
 
-Available options:
-- `--episodes`: Number of training episodes
-- `--headless`: Run in headless mode (no visible browser)
-- `--lr`: Learning rate
-- `--batch-size`: Batch size for training
-- `--buffer-size`: Replay buffer size
-- `--device`: Device to use for training ('auto', 'cuda', or 'cpu')
-- `--checkpoint-dir`: Directory to save checkpoints
-- `--log-dir`: Directory for TensorBoard logs
-- `--results-dir`: Directory for results
-- `--resume`: Path to checkpoint to resume training from
+**Key Training Arguments:**
 
-### Testing Trained Models
+- `--episodes`: Number of training episodes.
+- `--device`: Device to use (`auto`, `cuda`, `cpu`).
+- `--lr`: Learning rate (e.g., `0.0001`).
+- `--batch-size`: Batch size for training.
+- `--buffer-size`: Replay buffer capacity.
+- `--use-visual`: Enable visual feature processing.
+- `--use-numerical`: Enable/disable numerical feature processing (enabled by default).
+- `--resume`: Path to a checkpoint file to resume training.
+- `--reset-epsilon`: Reset the exploration rate when resuming.
 
-To evaluate a trained model without further training:
+### Testing a Trained Model
 
+The testing script automatically detects the model's configuration (visual/numerical) from the checkpoint file.
+
+**Run a Test:**
 ```bash
-python test.py --model ./checkpoints/best_model.pth
+python test.py --model ./checkpoints/model_ep1000.pth
 ```
 
-With custom parameters:
-```bash
-python test.py --model ./checkpoints/best_model.pth --episodes 3 --delay 0.05
 ```
 
-Available options:
-- `--model`: Path to the trained model file (.pth) [required]
-- `--episodes`: Number of test episodes to run (default: 5)
-- `--headless`: Run in headless mode (no browser UI)
-- `--device`: Device to use ('auto', 'cuda', or 'cpu')
-- `--delay`: Optional delay between steps in seconds (to slow down visualization)
+**Key Testing Arguments:**
 
-### Testing the Environment
+- `--model`: (Required) Path to the trained model file (`.pth`).
+- `--episodes`: Number of test episodes to run.
+- `--delay`: Optional delay in seconds between actions.
+- `--no-render`: Run silently without printing step-by-step progress.
 
-To verify that the environment works correctly:
+### Monitoring with TensorBoard
 
+Visualize training metrics in real-time:
 ```bash
-python environment.py --visualize
+# In a separate terminal
+tensorboard --logdir=logs
 ```
-
-This will show the processed frames that the agent sees.
-
-## How It Works
-
-1. **Game Environment**: The `DinoGameEnvironment` class creates a Playwright browser session that loads the Chrome dinosaur game.
-
-2. **Observation Processing**: Game screenshots are captured, converted to grayscale, resized, and normalized to create the agent's observations.
-
-3. **DQN Agent**: The agent receives these processed frames and uses its neural network to decide which action to take (do nothing, long jump, short jump, or duck).
-
-4. **Training Loop**: The `DinoTrainer` class manages the training process, collecting experiences from the environment and training the agent.
-
-5. **Reward System**: The agent receives rewards based on survival time and game score, with penalties for crashing.
+Navigate to `http://localhost:6006` in your browser.
 
 ## Technical Details
 
-### Neural Network Architecture
+### Hybrid Neural Network Architecture
 
-The DQN uses a convolutional neural network with:
-- Three convolutional layers for feature extraction
-- Adaptive average pooling for consistent output size
-- Three fully connected layers with dropout for Q-value estimation
+The DQN model dynamically adjusts its architecture based on the input configuration:
+- **Visual Path**: A series of convolutional layers processes the stacked game frames to extract spatial features.
+- **Numerical Path**: A multi-layer perceptron (MLP) processes the vector of numerical game states.
+- **Combined Path**: The outputs from the visual and/or numerical paths are concatenated and passed through a final set of fully connected layers to produce the Q-values for each action.
 
-### Reinforcement Learning Implementation
-
-- **Double DQN**: Uses separate target and policy networks to reduce overestimation bias
-- **Prioritized Experience Replay**: Prioritizes important experiences for more efficient learning
-- **Epsilon-Greedy Exploration**: Balances exploration and exploitation with a decaying epsilon value
-
-### Browser Automation
-
-- Asynchronous browser control with Playwright
-- Thread-safe communication between the environment and agent
-- Robust error handling and session recovery
+This flexible design allows the agent to leverage different sources of information effectively.
