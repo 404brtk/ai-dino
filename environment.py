@@ -598,6 +598,8 @@ class DinoGameEnvironment(gym.Env):
         if distance > 400:
             reward -= 0.005
             
+        self.last_score = current_score
+
         return reward * self.reward_scale
 
     def _detect_obstacle_cleared(self, game_state: Dict[str, Any]) -> bool:
@@ -622,6 +624,11 @@ class DinoGameEnvironment(gym.Env):
             first_obstacle_x > self.last_first_obstacle_x + 50 and  # Significant jump
             self.last_first_obstacle_x != -1):
             cleared = True
+
+        self.prev_obstacle_cleared = is_obstacle_cleared
+        self.last_obstacle_len = obstacle_len
+        if first_obstacle_x != -1:
+            self.last_first_obstacle_x = first_obstacle_x
         
         return cleared
 
