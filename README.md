@@ -102,8 +102,6 @@ The testing script automatically detects the model's configuration (visual/numer
 python test.py --model ./checkpoints/model_ep1000.pth
 ```
 
-```
-
 **Key Testing Arguments:**
 
 - `--model`: (Required) Path to the trained model file (`.pth`).
