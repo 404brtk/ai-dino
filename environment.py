@@ -570,36 +570,31 @@ class DinoGameEnvironment(gym.Env):
     def _calculate_reward(self, game_state: Dict[str, Any]) -> float:
         """Calculates the reward based on the final game state of a step."""
         if game_state.get('crashed', False):
-            return -1.0  # Crash penalty
+            return -1.0  * self.reward_scale # Crash penalty
         
         reward = 0.0
         current_score = game_state.get('score', self.last_score)
         distance = game_state.get('obstacle_distance', 600)
         speed = game_state.get('speed', 6)
         
-        # 1. Survival reward (scaled by speed for difficulty)
-        speed_factor = min(2.0, speed / 10.0)  # Cap at 2x multiplier
-        survival_reward = 0.01 * speed_factor
-        reward += survival_reward
+        # 1. Score progression reward (scaled by speed for difficulty)
+        score_diff = current_score - self.last_score
+        if score_diff > 0:
+            reward += score_diff * 0.01 * (speed / 10.0)
         
         # 2. Distance-based reward (encourage approaching obstacles)
-        if distance < 200:  # Close to obstacle
-            proximity_reward = (200 - distance) / 200 * 0.05
+        if distance <= 150:  # Close to obstacle
+            proximity_reward = (150 - distance) / 150 * 0.05
             reward += proximity_reward
         
         # 3. Enhanced obstacle clearing detection
         obstacle_cleared_event = self._detect_obstacle_cleared(game_state)
         if obstacle_cleared_event:
             # Scale reward by speed (harder = more reward)
-            clear_reward = 0.5 + (speed / 20.0)  # Base 0.5, up to 1.5 at high speed
+            clear_reward = 0.5 + (speed / 20.0)
             reward += clear_reward
             
-        # 4. Score progression reward
-        score_diff = current_score - self.last_score
-        if score_diff > 0:
-            reward += score_diff * 0.01
-        
-        # 5. Penalty for staying too far from obstacles (encourage engagement)
+        # 4. Penalty for staying too far from obstacles (encourage engagement)
         if distance > 400:
             reward -= 0.005
             
