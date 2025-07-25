@@ -46,31 +46,22 @@ class DQN(nn.Module):
         if self.use_numerical:
             # Numerical feature processor
             self.numerical_fc = nn.Sequential(
-                nn.Linear(numerical_input_size, 128),
+                nn.Linear(numerical_input_size, 32),
                 nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(128, 64),
-                nn.ReLU(),
-                nn.Linear(64, 32),
+                nn.Linear(32, 16),
                 nn.ReLU()
             )
-            total_input_size += 32
+            total_input_size += 16
         
         # Ensure we have some input
         if total_input_size == 0:
             raise ValueError("At least one of use_visual or use_numerical must be True")
         
-        # Value and advantage streams (Dueling DQN)
-        self.value_stream = nn.Sequential(
-            nn.Linear(total_input_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
+        # Fully connected layers for Q-value estimation
+        self.fc = nn.Sequential(
+            nn.Linear(total_input_size, n_actions)
         )
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(total_input_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, n_actions)
-        )
+
 
     def forward(self, visual_input: torch.Tensor = None, numerical_input: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Defines the forward pass of the DQN."""
@@ -94,14 +85,7 @@ class DQN(nn.Module):
         # Combine features
         combined_features = torch.cat(features, dim=1) if len(features) > 1 else features[0]
         
-        # Dueling DQN computation
-        values = self.value_stream(combined_features)
-        advantages = self.advantage_stream(combined_features)
-        
-        # Combine value and advantage
-        q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
-
-        return q_values
+        return self.fc(combined_features)
 
 class DQNAgent:
     """Complete DQN Agent with Double DQN and target network."""
@@ -284,19 +268,10 @@ class DQNAgent:
 
         # Compute loss
         loss = (weights * self.criterion(current_q_values.squeeze(1), target_q_values)).mean()
-
-        # Store values before backprop for monitoring
-        q_values_mean = current_q_values.mean().item()
-        target_q_mean = target_q_values.mean().item()
-        td_error_mean = np.mean(td_errors)
-    
-        # Optimize with gradient monitoring
+        # Optimize
         self.optimizer.zero_grad()
         loss.backward()
-
-        # Gradient clipping and monitoring
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
-
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Update target network
@@ -305,14 +280,7 @@ class DQNAgent:
             self.update_target_network()
 
         # Return training info
-        return {
-            'loss': loss.item(),
-            'grad_norm': grad_norm.item(),
-            'q_values_mean': q_values_mean,
-            'target_q_mean': target_q_mean,
-            'td_error_mean': td_error_mean,
-            'current_lr': self.optimizer.param_groups[0]['lr']
-        }
+        return loss.item()
 
     def save_model(self, filepath: str):
         """Save model state."""
