@@ -46,12 +46,13 @@ class DQN(nn.Module):
         if self.use_numerical:
             # Numerical feature processor
             self.numerical_fc = nn.Sequential(
-                nn.Linear(numerical_input_size, 32),
+                nn.Linear(numerical_input_size, 64),
                 nn.ReLU(),
-                nn.Linear(32, 16),
+                nn.Dropout(0.1),
+                nn.Linear(64, 64),
                 nn.ReLU()
             )
-            total_input_size += 16
+            total_input_size += 64
         
         # Ensure we have some input
         if total_input_size == 0:
@@ -59,9 +60,10 @@ class DQN(nn.Module):
         
         # Fully connected layers for Q-value estimation
         self.fc = nn.Sequential(
-            nn.Linear(total_input_size, n_actions)
+            nn.Linear(total_input_size, 64),
+            nn.ReLU(),
+            nn.Linear(64, n_actions)
         )
-
 
     def forward(self, visual_input: torch.Tensor = None, numerical_input: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Defines the forward pass of the DQN."""
