@@ -9,7 +9,7 @@ from utils import PrioritizedReplayBuffer, EpsilonGreedy
 
 
 class DQN(nn.Module):
-    """Deep Q-Network model for processing game frames."""
+    """Deep Q-Network model."""
     
     def __init__(self, input_shape: Tuple[int, int, int], n_actions: int, numerical_input_size: int = 6, use_numerical: bool = True, use_visual: bool = False):
         """
