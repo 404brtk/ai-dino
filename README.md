@@ -4,7 +4,7 @@ A machine learning project that trains an AI agent to play the Chrome Dinosaur G
 
 ## Project Overview
 
-AI-Dino uses a Deep Q-Network (DQN) to master the Chrome dinosaur game. It uniquely combines **visual data** from game frames with **numerical data** extracted directly from the game's state (e.g., speed, distance to obstacles). This hybrid approach allows the agent to build a more comprehensive understanding of the environment, leading to more robust performance.
+AI-Dino uses a Deep Q-Network (DQN) to master the Chrome dinosaur game. It uniquely combines **visual data** from game frames with **numerical data** extracted directly from the game's state (e.g., speed, distance to obstacles).
 
 The project is built with PyTorch, Playwright for browser automation, and follows the OpenAI Gym (Gymnasium) interface for a standardized environment.
 
