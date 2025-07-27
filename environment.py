@@ -611,7 +611,7 @@ class DinoGameEnvironment(gym.Env):
         survival_bonus = 0.001 * (1 + speed / 10.0)
         reward += survival_bonus
         
-        # 3. Distance-based reward (more conservative approach)
+        # 3. Distance-based reward
         if 65 <= distance <= 150:  # Optimal timing zone
             proximity_reward = (150 - distance) / 150 * 0.02
             reward += proximity_reward
@@ -620,7 +620,7 @@ class DinoGameEnvironment(gym.Env):
             danger_penalty = (65 - distance) / 65 * 0.02
             reward -= danger_penalty
         
-        # 5. Enhanced obstacle clearing detection with type-specific rewards
+        # 5. Obstacle clearing detection with type-specific rewards
         obstacle_cleared_event = self._detect_obstacle_cleared(game_state)
         if obstacle_cleared_event:
             # Different rewards for different obstacle types
@@ -630,12 +630,12 @@ class DinoGameEnvironment(gym.Env):
                 clear_reward = 0.15 + (speed / 40.0)
             reward += clear_reward
             
-        # 6. Penalty for staying too far (scales with speed - positioning becomes more critical)
+        # 6. Penalty for staying too far to the obstacle
         if distance > 400:
             far_penalty = 0.005 * (1 + speed / 15.0)
             reward -= far_penalty
             
-        # 7. Speed adaptation bonus (reward learning to handle higher speeds)
+        # 7. Speed adaptation bonus
         if speed > 8:  # After initial acceleration
             speed_adaptation = 0.001 * (speed - 8) / 8.0
             reward += speed_adaptation
@@ -653,15 +653,15 @@ class DinoGameEnvironment(gym.Env):
         # Multiple detection methods
         cleared = False
         
-        # Method 1: Rising edge detection
+        # Option 1: Rising edge detection
         if is_obstacle_cleared and not self.prev_obstacle_cleared:
             cleared = True
             
-        # Method 2: Obstacle count decreased
+        # Option 2: Obstacle count decreased
         elif obstacle_len < self.last_obstacle_len:
             cleared = True
             
-        # Method 3: New obstacle appeared (old one scrolled off)
+        # Option 3: New obstacle appeared (old one scrolled off)
         elif (obstacle_len > 0 and self.last_obstacle_len == obstacle_len and
             first_obstacle_x > self.last_first_obstacle_x + 50 and  # Significant jump
             self.last_first_obstacle_x != -1):
